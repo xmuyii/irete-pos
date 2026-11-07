@@ -17,6 +17,7 @@
 <script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="https://js.paystack.co/v1/inline.js"></script>
+<script src="config.js"></script>
 <style>
 :root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 html{scroll-padding-top:env(safe-area-inset-top,0px)}
@@ -61,8 +62,9 @@ const ymd=(off=0)=>new Date(Date.now()-off*864e5).toLocaleDateString('en-CA');
 const fmt=n=>(n<0?'-':'')+'₦'+Math.abs(Math.round(n)).toLocaleString('en-NG');
 const DEF={set:{wMode:'manual',wVal:0,tMode:'manual',tVal:0,blk:10000,pct:0,cap:0,low:20000},day:null,hist:[]};
 // ===== CLOUD CONFIG: fill these in (leave SB_URL empty to run in local-only mode) =====
-const SB_URL='',SB_KEY='',PAYSTACK_KEY='',PRICE_NGN=3000;
-const BANK={bank:'',acct:'',holder:''}; // your bank details for manual transfer payments
+const CFG=window.APP_CONFIG||{},SB_URL=CFG.SB_URL||'',SB_KEY=CFG.SB_KEY||'',PAYSTACK_KEY=CFG.PAYSTACK_KEY||'',PRICE_NGN=CFG.PRICE_NGN||3000;
+const BANK=CFG.BANK||{bank:'',acct:'',holder:'',whatsapp:''};
+const BUILD='2026.11.07-a'; // shown in the footer so you can confirm which version is live
 const cloud=!!(SB_URL&&SB_KEY);
 let KEY=K,S,sb,user=null,okAccess=true,acc={},syncT=null,pollT=null;
 const clone=o=>JSON.parse(JSON.stringify(o));
@@ -274,6 +276,7 @@ function render(){
   const sum4=[['Total volume',fmt(st.vol),'text-sky-500','trending-up'],['Commissions earned',fmt(st.profit),'text-emerald-500','coins'],['Transactions',st.n,'text-violet-400','receipt'],
     ['Cash liquidity',low&&open?'LOW':'Healthy',low&&open?'text-rose-500':'text-emerald-500','droplet']];
   $('#app').innerHTML=`
+  ${cfgBanner()}
   ${installCard()}
   <section class="${card} flex flex-wrap items-center gap-3">
     <div><div class="${sub}">${new Date().toLocaleDateString('en-NG',{weekday:'long',day:'numeric',month:'long'})}${acc.txt?' · '+acc.txt:''}</div>
@@ -344,7 +347,7 @@ function render(){
       return `<div class="py-2 border-b border-slate-200 dark:border-slate-800 last:border-0 text-sm"><div class="flex justify-between"><b>${h.date}</b>${tag}</div>
       <div class="${sub}">Started ${fmt(h.open||0)} · injected ${fmt(x.inj)} · <span class="text-emerald-500 font-semibold">profit ${fmt(x.profit)}</span></div></div>`}).join(''):`<div class="${sub}">Closed days will appear here with their tally.</div>`}
   </section>
-  <footer class="text-center text-xs ${sub} pb-6">POS Assistant by Irete Labs · ${cloud?'your data is backed up to your account':'data stays on this device'}</footer>`;
+  <footer class="text-center text-xs ${sub} pb-6">POS Assistant by Irete Labs · ${cloud?'your data is backed up to your account':'data stays on this device'} · v${BUILD}</footer>`;
   lucide.createIcons();drawCharts();
 }
 function drawCharts(){
@@ -534,7 +537,8 @@ function payPanel(until){
   const man=BANK.acct?`<div class="mt-3 rounded-2xl p-4 bg-slate-100 dark:bg-slate-800 text-sm"><div class="font-bold mb-1">Pay by bank transfer</div>
     <div>Send <b class="num">${fmt(PRICE_NGN)}</b> to:</div><div class="mt-1"><b>${BANK.bank}</b></div>
     <div class="text-xl font-black num tracking-wide">${BANK.acct}</div><div>${BANK.holder}</div>
-    <div class="text-xs text-slate-500 mt-2">Then tap “I’ve paid”. Premium is switched on once we confirm the transfer.</div></div>
+    <div class="text-xs text-slate-500 mt-2">1) Send your payment screenshot on WhatsApp. 2) Tap “I’ve paid” so we can match it. Premium is switched on once we confirm.</div></div>
+    ${BANK.whatsapp?`<a href="https://wa.me/${BANK.whatsapp}?text=${encodeURIComponent('Hello, I just paid for POS Assistant Premium. My account email is '+(user?user.email:'')+'. Screenshot attached.')}" target="_blank" rel="noopener" class="${btn} block w-full mt-2 text-center bg-[#25D366] text-slate-950">Send screenshot on WhatsApp</a>`:''}
     <button class="${btn} w-full mt-2 bg-emerald-400 text-slate-950" onclick="openPaid()">I’ve paid</button>`:'';
   return (pk+man)||'<div class="text-sm text-slate-500 mt-3 text-center">Payments are not set up yet.</div>';
 }
@@ -703,6 +707,11 @@ async function delExpense(id,b){
   await sb.from('expenses').delete().eq('id',id);openExpenses();
 }
 
+function cfgBanner(){
+  if(cloud||['localhost','127.0.0.1',''].includes(location.hostname))return '';
+  return `<section class="rounded-2xl p-4 bg-rose-500/10 border border-rose-500/40 text-sm"><b class="text-rose-500">Not connected to the database.</b><div class="mt-1">Login, sync, staff and Premium are off because SB_URL and SB_KEY are empty in <code>config.js</code>. Fill them in and redeploy.</div></section>`;
+}
+
 // ===== INSTALL AS APP (PWA) =====
 let deferredInstall=null;
 const isStandalone=()=>window.matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
@@ -719,7 +728,11 @@ async function doInstall(){if(!deferredInstall)return;deferredInstall.prompt();t
 function hideInstall(){try{localStorage.setItem('pwa_hide',Date.now()+7*864e5)}catch(e){}render()}
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstall=e;if(S&&(user||!cloud))render()});
 window.addEventListener('appinstalled',()=>{deferredInstall=null;if(S&&(user||!cloud))render()});
-if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+if('serviceWorker' in navigator){
+  const hadSW=!!navigator.serviceWorker.controller;let reloaded=false;
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{if(hadSW&&!reloaded&&!$('#modal').innerHTML){reloaded=true;location.reload()}});
+  window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').then(r=>r.update()).catch(()=>{}));
+}
 
 async function boot(){
   if(!cloud){load(K);render();return}
