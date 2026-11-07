@@ -55,7 +55,8 @@ const ymd=(off=0)=>new Date(Date.now()-off*864e5).toLocaleDateString('en-CA');
 const fmt=n=>(n<0?'-':'')+'₦'+Math.abs(Math.round(n)).toLocaleString('en-NG');
 const DEF={set:{wMode:'manual',wVal:0,tMode:'manual',tVal:0,blk:10000,pct:0,cap:0,low:20000},day:null,hist:[]};
 // ===== CLOUD CONFIG: fill these in (leave SB_URL empty to run in local-only mode) =====
-const SB_URL='https://acfdvuhikpbiqmplhowx.supabase.co',SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFjZmR2dWhpa3BiaXFtcGxob3d4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM2OTgzNDYsImV4cCI6MjEwOTI3NDM0Nn0.rTSVmt3X731kb8jLXKnI52jftF9WbhkMUAzqWsxYS8E',PAYSTACK_KEY='',PRICE_NGN=3000;
+const SB_URL='',SB_KEY='',PAYSTACK_KEY='',PRICE_NGN=3000;
+const BANK={bank:'',acct:'',holder:''}; // your bank details for manual transfer payments
 const cloud=!!(SB_URL&&SB_KEY);
 let KEY=K,S,sb,user=null,okAccess=true,acc={},syncT=null,pollT=null;
 const clone=o=>JSON.parse(JSON.stringify(o));
@@ -269,6 +270,7 @@ function render(){
   $('#app').innerHTML=`
   <section class="${card} flex flex-wrap items-center gap-3">
     <div><div class="${sub}">${new Date().toLocaleDateString('en-NG',{weekday:'long',day:'numeric',month:'long'})}${acc.txt?' · '+acc.txt:''}</div>
+      <div id="cs2" class="${sub} ${/^(Offline|Setup)/.test(syncMsg)?'!text-rose-500 font-semibold':''}">${syncMsg}</div>
       <div class="font-bold text-lg">${!open?'No active session':closed?'Day closed':'Session open'}
       ${open?`<span class="text-sm font-normal ${sub}">· float ${fmt(d.open)}</span>`:''}</div></div>
     <div class="ml-auto flex gap-2 flex-wrap">
@@ -292,6 +294,7 @@ function render(){
     ${d.inj.length?`<div class="mt-3 text-xs ${sub}">Injections:</div>${d.inj.map((x,i)=>`<div class="flex justify-between text-sm py-1"><span>${new Date(x.t).toLocaleTimeString('en-NG',{hour:'2-digit',minute:'2-digit'})}${x.note?' · '+x.note.replace(/</g,'&lt;'):''}</span><span><b class="num">${fmt(x.a)}</b>${closed?'':` <button class="text-xs text-rose-500 ml-2" onclick="delInj(${i},this)">remove</button>`}</span></div>`).join('')}`:''}
   </section>
 
+  ${premiumCard()}
   <section class="grid grid-cols-2 lg:grid-cols-4 gap-3">${sum4.map(c=>`<div class="${card}"><div class="flex justify-between ${sub}">${c[0]}<i data-lucide="${c[3]}" class="w-4 h-4"></i></div><div class="text-xl sm:text-2xl font-extrabold num mt-1 ${c[2]}">${c[1]}</div></div>`).join('')}</section>
 
   <section class="grid sm:grid-cols-2 gap-3">
@@ -350,7 +353,7 @@ function drawCharts(){
 }
 // ===== CLOUD: auth, sync, premium, staff =====
 let plan={},BIZ=null,premium=false,teamRows=[],teamNames={};
-const setCs=t=>{const e=$('#cs');if(e)e.textContent=t};
+let syncMsg='';const setCs=t=>{syncMsg=t;['#cs','#cs2'].forEach(q=>{const e=$(q);if(e)e.textContent=t})};
 function mergeDay(a,b){
   const del=[...new Set([...(a.del||[]),...(b.del||[])])],idel=[...new Set([...(a.idel||[]),...(b.idel||[])])];
   const m=new Map();[...(b.tx||[]),...(a.tx||[])].forEach(t=>m.set(t.id,t));
@@ -387,7 +390,7 @@ async function pushDay(){
     persist();setCs('Synced');if(changed)render();
   }catch(e){
     if(e&&e.code==='42501'){setCs('Premium required to sync');return}
-    setCs('Offline · will retry');clearTimeout(syncT);syncT=setTimeout(pushDay,8000);
+    console.error(e);setCs('Offline: '+((e&&e.message)||'will retry').slice(0,80));clearTimeout(syncT);syncT=setTimeout(pushDay,8000);
   }
 }
 const pushSet=()=>{if(cloud&&user&&plan.role==='owner')sb.from('profiles').update({settings:S.set}).eq('user_id',user.id).then(()=>{})};
@@ -406,7 +409,7 @@ function applyRole(){
 function startPoll(){
   if(pollT)return;
   const tick=async()=>{if(!user||!okAccess||$('#modal').innerHTML||document.hidden)return;
-    try{const b=JSON.stringify(S);await pull();if(JSON.stringify(S)!==b){persist();render()}setCs('Synced')}catch(e){setCs('Offline')}};
+    try{const b=JSON.stringify(S)+JSON.stringify(acc);await pull();await checkAccess();if(JSON.stringify(S)+JSON.stringify(acc)!==b){persist();render()}setCs('Synced')}catch(e){setCs('Offline')}};
   pollT=setInterval(tick,20000);document.addEventListener('visibilitychange',tick);
 }
 const shell=h=>`<div class="fixed inset-0 z-50 bg-slate-100 dark:bg-slate-950 grid place-items-center p-4 overflow-y-auto"><div class="w-full max-w-sm py-6">
@@ -461,7 +464,22 @@ async function enter(u){
     if(!ok){await sb.auth.signOut();setTimeout(()=>{const e=$('#aerr');if(e)e.textContent='This account is no longer active.'},150);return}
     applyRole();await pull();persist();render();await pushMissing();
     setCs('Synced');startPoll();
-  }catch(e){setCs('Offline')}
+  }catch(e){console.error(e);applyRole();setCs('Setup error: '+((e&&e.message)||'see console'));toast('Setup problem: '+((e&&e.message)||e),'bg-rose-500 text-white')}
+}
+
+// ===== PREMIUM CARD (always visible on the dashboard) =====
+function premiumCard(){
+  if(!cloud||plan.role==='staff')return '';
+  const until=!!(plan.sub_until&&new Date(plan.sub_until)>Date.now()),
+    badge=until?['Active','bg-emerald-500/15 text-emerald-500']:premium?['Trial','bg-amber-400/15 text-amber-400']:['Free','bg-slate-500/15 text-slate-500'];
+  const days=plan.trial_ends?Math.max(0,Math.ceil((new Date(plan.trial_ends)-Date.now())/864e5)):0;
+  const line=until?'Active until '+new Date(plan.sub_until).toLocaleDateString('en-NG'):premium?days+' days of free trial left, all features unlocked':'You are on the Free plan';
+  const li=(ic,t)=>`<div class="flex items-center gap-2 text-sm"><i data-lucide="${ic}" class="w-4 h-4 text-emerald-500 shrink-0"></i>${t}</div>`;
+  return `<section class="rounded-2xl p-4 bg-gradient-to-br from-amber-400/10 to-emerald-400/10 border border-amber-400/30">
+   <div class="flex items-center gap-2"><i data-lucide="crown" class="w-5 h-5 text-amber-400"></i><b class="text-lg">Premium</b><span class="text-xs font-semibold px-2 py-0.5 rounded-full ${badge[1]}">${badge[0]}</span></div>
+   <div class="text-sm text-slate-500 dark:text-slate-400 mt-1">${line}</div>
+   <div class="grid sm:grid-cols-2 gap-2 mt-3">${li('users','Staff accounts: a login for each attendant (up to 5)')}${li('scale','Team report: profit, shortages and overages per attendant')}${li('history','Full history (Free keeps the last 7 days)')}${li('download','CSV export of every shift')}</div>
+   <div class="flex gap-2 mt-3"><button class="${btn} flex-1 bg-amber-400 text-slate-950" onclick="openPremium()">${until?'Details / extend':'See Premium &amp; upgrade'}</button><button class="${btn} bg-slate-200 dark:bg-slate-800" onclick="openTeam()">Team</button></div></section>`;
 }
 
 // ===== PREMIUM PAGE =====
@@ -488,8 +506,27 @@ function openPremium(){
   ${row('Staff accounts','—','Up to 5')}${row('Team shortage report','—','Yes')}${row('CSV export','—','Yes')}
   <div class="mt-4 text-center"><div class="text-3xl font-black num text-emerald-500">${fmt(PRICE_NGN)}<span class="text-sm font-normal text-slate-500"> / 30 days</span></div>
   <div class="text-xs text-slate-500 mt-1">Each payment adds 30 days. Paid in naira via Paystack.</div></div>
-  <button class="${btn} w-full mt-3 bg-emerald-400 text-slate-950" onclick="pay()">${until?'Add 30 days':'Get Premium'}</button>
+  ${payPanel(until)}
   <div id="aerr" class="text-sm text-slate-500 mt-2 min-h-[1.25rem] text-center"></div>`);
+}
+
+function payPanel(until){
+  const pk=PAYSTACK_KEY?`<button class="${btn} w-full mt-3 bg-emerald-400 text-slate-950" onclick="pay()">${until?'Add 30 days':'Pay online'}</button>`:'';
+  const man=BANK.acct?`<div class="mt-3 rounded-2xl p-4 bg-slate-100 dark:bg-slate-800 text-sm"><div class="font-bold mb-1">Pay by bank transfer</div>
+    <div>Send <b class="num">${fmt(PRICE_NGN)}</b> to:</div><div class="mt-1"><b>${BANK.bank}</b></div>
+    <div class="text-xl font-black num tracking-wide">${BANK.acct}</div><div>${BANK.holder}</div>
+    <div class="text-xs text-slate-500 mt-2">Then tap “I’ve paid”. Premium is switched on once we confirm the transfer.</div></div>
+    <button class="${btn} w-full mt-2 bg-emerald-400 text-slate-950" onclick="openPaid()">I’ve paid</button>`:'';
+  return (pk+man)||'<div class="text-sm text-slate-500 mt-3 text-center">Payments are not set up yet.</div>';
+}
+function openPaid(){modal(`<h3 class="text-xl font-bold mb-1">Confirm your transfer</h3><p class="text-sm text-slate-500 dark:text-slate-400 mb-4">Tell us who sent the money so we can match it.</p>
+  <input id="f_pn" class="${inp} !text-base" placeholder="Sender name or transfer reference" autofocus>
+  <button class="${btn} w-full mt-4 bg-emerald-400 text-slate-950" onclick="sendPaid()">Send</button>`)}
+async function sendPaid(){
+  const note=$('#f_pn').value.trim();if(!note)return toast('Enter the sender name or reference','bg-rose-500 text-white');
+  const {error}=await sb.from('payment_requests').insert({user_id:user.id,email:user.email,business:plan.business||'',amount:PRICE_NGN,note});
+  if(error)return toast('Could not send: try again','bg-rose-500 text-white');
+  closeM();toast('Sent. We’ll confirm and switch on Premium shortly.');
 }
 
 // ===== TEAM =====
