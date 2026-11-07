@@ -3,7 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Irete Labs · POS Ledger</title>
+<title>POS Assistant · by Irete Labs</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#34d399">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="POS Assistant">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <script>try{var t=localStorage.getItem('irete_theme');if(t==='light')document.documentElement.classList.remove('dark')}catch(e){}</script>
 <script src="https://cdn.tailwindcss.com/3.4.17"></script>
 <script>tailwind.config={darkMode:'class'}</script>
@@ -25,8 +31,8 @@ input:focus{outline:2px solid #34d399}
 <body class="bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100 min-h-screen">
 <header class="sticky top-0 z-30 bg-white/90 dark:bg-slate-950/90 backdrop-blur border-b border-slate-200 dark:border-slate-800">
   <div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
-    <div class="w-9 h-9 rounded-xl bg-emerald-400 text-slate-950 grid place-items-center font-black">I</div>
-    <div class="leading-tight"><div class="font-bold">Irete Labs</div><div class="text-xs text-slate-500 dark:text-slate-400">POS Ledger</div></div>
+    <div class="w-9 h-9 rounded-xl bg-emerald-400 text-slate-950 grid place-items-center font-black">P</div>
+    <div class="leading-tight"><div class="font-bold">POS Assistant</div><div class="text-xs text-slate-500 dark:text-slate-400">by Irete Labs</div></div>
     <div class="ml-auto flex items-center gap-2">
       <label class="flex items-center gap-2 text-xs cursor-pointer select-none">
         <span class="hidden sm:inline text-slate-500 dark:text-slate-400">Auto-simulate terminal</span>
@@ -89,7 +95,7 @@ function mk(a,type,fee,cost,src,ref,t,cash){
 const sum=(arr,f)=>arr.reduce((x,y)=>x+f(y),0);
 function stats(d){
   const inj=sum(d.inj,i=>i.a),cashOut=sum(d.tx,t=>t.cashOut),digIn=sum(d.tx,t=>t.digIn);
-  return {inj,cashOut,digIn,vol:sum(d.tx,t=>t.a),profit:sum(d.tx,t=>t.profit),n:d.tx.length,
+  return {inj,cashOut,digIn,vol:sum(d.tx,t=>(t.type==='w'||t.type==='t')?t.a:0),credit:sum(d.tx,t=>t.type==='d'?t.a:t.type==='r'?-t.a:0),profit:sum(d.tx,t=>t.profit),n:d.tx.length,
     drawer:(d.open||0)+inj-cashOut, expCash:(d.open||0)+inj-cashOut};
 }
 
@@ -268,6 +274,7 @@ function render(){
   const sum4=[['Total volume',fmt(st.vol),'text-sky-500','trending-up'],['Commissions earned',fmt(st.profit),'text-emerald-500','coins'],['Transactions',st.n,'text-violet-400','receipt'],
     ['Cash liquidity',low&&open?'LOW':'Healthy',low&&open?'text-rose-500':'text-emerald-500','droplet']];
   $('#app').innerHTML=`
+  ${installCard()}
   <section class="${card} flex flex-wrap items-center gap-3">
     <div><div class="${sub}">${new Date().toLocaleDateString('en-NG',{weekday:'long',day:'numeric',month:'long'})}${acc.txt?' · '+acc.txt:''}</div>
       <div id="cs2" class="${sub} ${/^(Offline|Setup)/.test(syncMsg)?'!text-rose-500 font-semibold':''}">${syncMsg}</div>
@@ -289,7 +296,8 @@ function render(){
     <div class="mt-3 text-sm space-y-1">
       <div class="flex justify-between"><span>Cash in drawer now</span><b class="num">${fmt(st.drawer)}</b></div>
       <div class="flex justify-between"><span>Bank / digital received</span><b class="num">${fmt(st.digIn)}</b></div>
-      <div class="flex justify-between border-t border-slate-200 dark:border-slate-800 pt-1"><span>Total money (started + injected + profit)</span><b class="num">${fmt((d.open||0)+st.inj+st.profit)}</b></div>
+      ${st.credit?`<div class="flex justify-between"><span>Credit given, not yet repaid</span><b class="num text-rose-400">${fmt(st.credit)}</b></div>`:''}
+      <div class="flex justify-between border-t border-slate-200 dark:border-slate-800 pt-1"><span>Total money (started + injected + profit${st.credit?' − credit':''})</span><b class="num">${fmt((d.open||0)+st.inj+st.profit-st.credit)}</b></div>
     </div>
     ${d.inj.length?`<div class="mt-3 text-xs ${sub}">Injections:</div>${d.inj.map((x,i)=>`<div class="flex justify-between text-sm py-1"><span>${new Date(x.t).toLocaleTimeString('en-NG',{hour:'2-digit',minute:'2-digit'})}${x.note?' · '+x.note.replace(/</g,'&lt;'):''}</span><span><b class="num">${fmt(x.a)}</b>${closed?'':` <button class="text-xs text-rose-500 ml-2" onclick="delInj(${i},this)">remove</button>`}</span></div>`).join('')}`:''}
   </section>
@@ -312,6 +320,8 @@ function render(){
     <button ${!open||closed?'disabled':''} class="${btn} !py-5 text-left bg-emerald-400 text-slate-950 disabled:opacity-40" onclick="openTxn('t')"><i data-lucide="arrow-left-right" class="w-6 h-6 mb-1"></i><div>Transfer / deposit</div><div class="text-xs font-normal opacity-70">Money in, cash out</div></button>
   </section>
 
+  ${toolsRow()}
+
   ${closed&&d.closed.counted!==undefined?`<section class="${card}"><div class="font-bold mb-2">Day reconciliation</div><div class="space-y-2">${flag('Cash (counted '+fmt(d.closed.counted)+' vs expected '+fmt(d.closed.expCash)+')',d.closed.varCash)}${d.closed.varBank!=null?flag('Digital',d.closed.varBank):''}</div></section>`:''}
 
   <section class="grid lg:grid-cols-3 gap-3">
@@ -323,8 +333,8 @@ function render(){
   <section class="${card}"><div class="flex items-center mb-2"><div class="font-bold">Today’s ledger</div><span class="ml-auto ${sub}">${st.n} entries</span></div>
     <div class="divide-y divide-slate-200 dark:divide-slate-800">
     ${d.tx.length?d.tx.map(t=>`<div class="py-3 flex items-center gap-3 ${Date.now()-t.t<4000?'pop':''}">
-      <div class="w-9 h-9 rounded-xl grid place-items-center ${t.type==='w'?'bg-amber-400/15 text-amber-400':'bg-emerald-400/15 text-emerald-400'}"><i data-lucide="${t.type==='w'?'credit-card':'arrow-left-right'}" class="w-4 h-4"></i></div>
-      <div class="min-w-0 flex-1"><div class="font-semibold num">${fmt(t.a)} <span class="text-xs font-normal ${sub}">${t.type==='w'?'Withdrawal':'Transfer'}${t.src==='terminal'?' · terminal':''}${t.ref?' · '+t.ref.replace(/</g,'&lt;'):''}</span></div>
+      <div class="w-9 h-9 rounded-xl grid place-items-center ${TY(t).c}"><i data-lucide="${TY(t).i}" class="w-4 h-4"></i></div>
+      <div class="min-w-0 flex-1"><div class="font-semibold num">${fmt(t.a)} <span class="text-xs font-normal ${sub}">${TY(t).l}${t.src==='terminal'?' · terminal':''}${t.ref?' · '+t.ref.replace(/</g,'&lt;'):''}</span></div>
       <div class="${sub}">${new Date(t.t).toLocaleTimeString('en-NG',{hour:'2-digit',minute:'2-digit'})} · fee ${fmt(t.fee)} · cost ${fmt(t.cost)}</div></div>
       <div class="text-right"><div class="font-bold text-emerald-500 num">+${fmt(t.profit)}</div>${closed?'':`<button class="text-xs text-rose-500" onclick="voidTx('${t.id}',this)">void</button>`}</div></div>`).join(''):`<div class="py-6 text-center ${sub}">No transactions yet.</div>`}
     </div></section>
@@ -334,7 +344,7 @@ function render(){
       return `<div class="py-2 border-b border-slate-200 dark:border-slate-800 last:border-0 text-sm"><div class="flex justify-between"><b>${h.date}</b>${tag}</div>
       <div class="${sub}">Started ${fmt(h.open||0)} · injected ${fmt(x.inj)} · <span class="text-emerald-500 font-semibold">profit ${fmt(x.profit)}</span></div></div>`}).join(''):`<div class="${sub}">Closed days will appear here with their tally.</div>`}
   </section>
-  <footer class="text-center text-xs ${sub} pb-6">Irete Labs · data stays on this device</footer>`;
+  <footer class="text-center text-xs ${sub} pb-6">POS Assistant by Irete Labs · ${cloud?'your data is backed up to your account':'data stays on this device'}</footer>`;
   lucide.createIcons();drawCharts();
 }
 function drawCharts(){
@@ -413,11 +423,11 @@ function startPoll(){
   pollT=setInterval(tick,20000);document.addEventListener('visibilitychange',tick);
 }
 const shell=h=>`<div class="fixed inset-0 z-50 bg-slate-100 dark:bg-slate-950 grid place-items-center p-4 overflow-y-auto"><div class="w-full max-w-sm py-6">
-  <div class="flex items-center gap-3 mb-6"><div class="w-11 h-11 rounded-xl bg-emerald-400 text-slate-950 grid place-items-center font-black text-xl">I</div><div><div class="font-bold text-lg">Irete Labs</div><div class="text-xs text-slate-500 dark:text-slate-400">POS Ledger</div></div></div>${h}</div></div>`;
+  <div class="flex items-center gap-3 mb-6"><div class="w-11 h-11 rounded-xl bg-emerald-400 text-slate-950 grid place-items-center font-black text-xl">P</div><div><div class="font-bold text-lg">POS Assistant</div><div class="text-xs text-slate-500 dark:text-slate-400">by Irete Labs</div></div></div>${h}</div></div>`;
 function showAuth(mode='in'){
   const up=mode==='up';
   $('#auth').innerHTML=shell(`<h2 class="text-2xl font-bold mb-1">${up?'Create your account':'Welcome back'}</h2>
-  <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">${up?'14-day free trial. No card needed.':'Sign in to your ledger.'}</p>
+  <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">${up?'Free to start. Try Premium free for 14 days, no card needed.':'Sign in to your account.'}</p>
   ${up?`<input id="a_biz" class="${inp} mb-3 !text-base" placeholder="Business name">`:''}
   <input id="a_em" type="email" autocomplete="email" class="${inp} mb-3 !text-base" placeholder="Email">
   <input id="a_pw" type="password" autocomplete="${up?'new-password':'current-password'}" class="${inp} !text-base" placeholder="Password (min 6 characters)">
@@ -473,13 +483,19 @@ function premiumCard(){
   const until=!!(plan.sub_until&&new Date(plan.sub_until)>Date.now()),
     badge=until?['Active','bg-emerald-500/15 text-emerald-500']:premium?['Trial','bg-amber-400/15 text-amber-400']:['Free','bg-slate-500/15 text-slate-500'];
   const days=plan.trial_ends?Math.max(0,Math.ceil((new Date(plan.trial_ends)-Date.now())/864e5)):0;
-  const line=until?'Active until '+new Date(plan.sub_until).toLocaleDateString('en-NG'):premium?days+' days of free trial left, all features unlocked':'You are on the Free plan';
+  const line=until?'Active until '+new Date(plan.sub_until).toLocaleDateString('en-NG'):premium?days+' days of free trial left, all features unlocked':plan.trial_available?'You are on the Free plan. Try every Premium feature free for 14 days.':'Your free trial has ended. Upgrade to unlock Premium.';
   const li=(ic,t)=>`<div class="flex items-center gap-2 text-sm"><i data-lucide="${ic}" class="w-4 h-4 text-emerald-500 shrink-0"></i>${t}</div>`;
   return `<section class="rounded-2xl p-4 bg-gradient-to-br from-amber-400/10 to-emerald-400/10 border border-amber-400/30">
    <div class="flex items-center gap-2"><i data-lucide="crown" class="w-5 h-5 text-amber-400"></i><b class="text-lg">Premium</b><span class="text-xs font-semibold px-2 py-0.5 rounded-full ${badge[1]}">${badge[0]}</span></div>
    <div class="text-sm text-slate-500 dark:text-slate-400 mt-1">${line}</div>
-   <div class="grid sm:grid-cols-2 gap-2 mt-3">${li('users','Staff accounts: a login for each attendant (up to 5)')}${li('scale','Team report: profit, shortages and overages per attendant')}${li('history','Full history (Free keeps the last 7 days)')}${li('download','CSV export of every shift')}</div>
-   <div class="flex gap-2 mt-3"><button class="${btn} flex-1 bg-amber-400 text-slate-950" onclick="openPremium()">${until?'Details / extend':'See Premium &amp; upgrade'}</button><button class="${btn} bg-slate-200 dark:bg-slate-800" onclick="openTeam()">Team</button></div></section>`;
+   <div class="grid sm:grid-cols-2 gap-2 mt-3">${li('users','Staff accounts: a login for each attendant (up to 5)')}${li('scale','Team report: profit, shortages and overages per attendant')}${li('notebook-pen','Customer debt ledger with WhatsApp reminders')}${li('wallet','Expenses and real monthly net profit')}${li('history','Full history (Free keeps the last 7 days)')}${li('download','CSV export of every shift')}</div>
+   <div class="flex gap-2 mt-3">${plan.trial_available?`<button class="${btn} flex-1 bg-amber-400 text-slate-950" onclick="startTrial()">Start 14-day free trial</button><button class="${btn} bg-slate-200 dark:bg-slate-800" onclick="openPremium()">Compare</button>`:`<button class="${btn} flex-1 bg-amber-400 text-slate-950" onclick="openPremium()">${until?'Details / extend':'See Premium &amp; upgrade'}</button>`}<button class="${btn} bg-slate-200 dark:bg-slate-800" onclick="openTeam()">Team</button></div></section>`;
+}
+
+async function startTrial(){
+  const {error}=await sb.rpc('start_trial');
+  if(error)return toast('Could not start the trial: '+error.message,'bg-rose-500 text-white');
+  await checkAccess();closeM();render();toast('14-day Premium trial started: everything is unlocked');
 }
 
 // ===== PREMIUM PAGE =====
@@ -492,10 +508,13 @@ function openPremium(){
   const row=(f,a,b)=>`<div class="grid grid-cols-[1fr_5rem_5rem] gap-2 py-2 text-sm border-b border-slate-200 dark:border-slate-800 items-center"><span>${f}</span><span class="text-center text-slate-500">${a}</span><span class="text-center font-semibold text-emerald-500">${b}</span></div>`;
   modal(`<div class="flex items-center mb-3"><h3 class="text-xl font-bold flex items-center gap-2"><i data-lucide="crown" class="w-5 h-5 text-amber-400"></i>Premium</h3><button class="ml-auto text-sm text-sky-500" onclick="closeM()">Close</button></div>
   <div class="rounded-2xl p-4 bg-slate-100 dark:bg-slate-800"><div class="font-bold ${status[2]}">${status[0]}</div><div class="text-sm text-slate-500 dark:text-slate-400">${status[1]}</div></div>
+  ${plan.trial_available?`<button class="${btn} w-full mt-2 bg-amber-400 text-slate-950" onclick="startTrial()">Start my 14-day free trial</button>`:''}
   <div class="mt-4 font-bold">What Premium is used for</div>
   <div class="divide-y divide-slate-200 dark:divide-slate-800">
   ${use('users','Staff accounts (up to 5)','Each attendant gets their own login. Every shift, float and cash count is saved under their name, so a shortage points to a person, not a guess.')}
   ${use('scale','Team report','See each attendant’s profit, shortages and overages for the last 30 days, and who is on shift right now.')}
+  ${use('notebook-pen','Customer debt ledger','Record who owes you, record part-payments, and send a WhatsApp reminder in one tap. Credit you give out is tracked so your drawer count still balances.')}
+  ${use('wallet','Expenses &amp; real net profit','Log rent, fuel, wages and data. See what you actually keep each month after costs, not just commissions.')}
   ${use('history','Full history','Free keeps the last 7 days of past days. Premium keeps everything.')}
   ${use('download','CSV export','Download shift records for your accountant or your own files.')}
   ${use('message-circle','Daily owner summary (coming soon)','A WhatsApp or SMS summary when each day closes. Not available yet.')}
@@ -503,7 +522,7 @@ function openPremium(){
   <div class="mt-3 font-bold">Free vs Premium</div>
   <div class="grid grid-cols-[1fr_5rem_5rem] gap-2 text-xs text-slate-500 pt-2"><span></span><span class="text-center">Free</span><span class="text-center">Premium</span></div>
   ${row('Record transactions &amp; daily tally','Yes','Yes')}${row('Cloud backup, any device','Yes','Yes')}${row('Past days history','7 days','All')}
-  ${row('Staff accounts','—','Up to 5')}${row('Team shortage report','—','Yes')}${row('CSV export','—','Yes')}
+  ${row('Staff accounts','—','Up to 5')}${row('Team shortage report','—','Yes')}${row('Customer debt ledger','—','Yes')}${row('Expenses &amp; net profit','—','Yes')}${row('CSV export','—','Yes')}
   <div class="mt-4 text-center"><div class="text-3xl font-black num text-emerald-500">${fmt(PRICE_NGN)}<span class="text-sm font-normal text-slate-500"> / 30 days</span></div>
   <div class="text-xs text-slate-500 mt-1">Each payment adds 30 days. Paid in naira via Paystack.</div></div>
   ${payPanel(until)}
@@ -580,8 +599,128 @@ function exportCsv(){
     const d=r.data,st=stats(d),c=d.closed||{};
     return [r.date,teamNames[r.staff_id]||'',d.open||0,st.inj,st.vol,st.profit,Math.round(st.expCash),c.counted??'',c.varCash??''].map(q).join(',')}));
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([lines.join('\n')],{type:'text/csv'}));
-  a.download='irete-shifts-'+ymd()+'.csv';a.click();
+  a.download='pos-assistant-shifts-'+ymd()+'.csv';a.click();
 }
+
+// ===== SHARED HELPERS =====
+const TY=t=>({w:{l:'Withdrawal',i:'credit-card',c:'bg-amber-400/15 text-amber-400'},t:{l:'Transfer',i:'arrow-left-right',c:'bg-emerald-400/15 text-emerald-400'},
+  d:{l:'Credit given',i:'notebook-pen',c:'bg-rose-500/15 text-rose-400'},r:{l:'Debt repaid',i:'badge-check',c:'bg-sky-400/15 text-sky-400'}})[t.type]||{l:'Entry',i:'receipt',c:''};
+const mHead=(t,ic)=>`<div class="flex items-center mb-3"><h3 class="text-xl font-bold flex items-center gap-2"><i data-lucide="${ic}" class="w-5 h-5"></i>${t}</h3><button class="ml-auto text-sm text-sky-500" onclick="closeM()">Close</button></div>`;
+const lockBox=t=>`<div class="rounded-2xl p-4 bg-amber-400/10 text-sm"><b>${t} is a Premium feature.</b><div class="mt-1 text-slate-600 dark:text-slate-300">Start your free trial or upgrade to use it.</div></div><button class="${btn} w-full mt-3 bg-amber-400 text-slate-950" onclick="openPremium()">See what Premium includes</button>`;
+const setPop=h=>{$('#modal .pop').innerHTML=h;lucide.createIcons()};
+function toolsRow(){
+  if(!cloud)return '';
+  const lk=premium?'':'<i data-lucide="lock" class="w-3 h-3 inline ml-1 text-amber-400"></i>',own=plan.role!=='staff';
+  const b='class="'+btn+' text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800"';
+  return `<section class="grid ${own?'grid-cols-2':'grid-cols-1'} gap-3"><button ${b} onclick="openDebts()"><i data-lucide="notebook-pen" class="w-5 h-5 mb-1 text-rose-400"></i><div>Customer debts${lk}</div></button>
+  ${own?`<button ${b} onclick="openExpenses()"><i data-lucide="wallet" class="w-5 h-5 mb-1 text-sky-400"></i><div>Expenses &amp; net profit${lk}</div></button>`:''}</section>`;
+}
+function ledger(type,a,method,ref){ // post credit given / debt repaid into today's shift so the drawer count still balances
+  S.day.tx.unshift({id:Math.random().toString(36).slice(2),t:Date.now(),type,a,fee:0,cost:0,profit:0,src:'debt',ref,
+    cashOut:type==='d'?a:(method==='cash'?-a:0),digIn:type==='r'&&method==='transfer'?a:0});
+  save();render();
+}
+const shiftOpen=()=>S.day.open!==null&&!S.day.closed;
+
+// ===== CUSTOMER DEBTS (Premium) =====
+let debtRows=[];
+const waLink=(p,t)=>{p=(p||'').replace(/\D/g,'');if(p.startsWith('0'))p='234'+p.slice(1);return p?'https://wa.me/'+p+'?text='+encodeURIComponent(t):''};
+async function openDebts(){
+  modal('<div class="text-sm text-slate-500">Loading…</div>');
+  if(!premium)return setPop(mHead('Customer debts','notebook-pen')+lockBox('Customer debts'));
+  const {data,error}=await sb.from('debts').select('*').order('created_at',{ascending:false});
+  if(error){setPop(mHead('Customer debts','notebook-pen')+'<div class="text-sm text-rose-500">Could not load: '+error.message+'</div>');return}
+  debtRows=data||[];
+  const open=debtRows.filter(x=>x.amount-x.paid>0),owed=sum(open,x=>x.amount-x.paid),sub='text-xs text-slate-500 dark:text-slate-400',inp2=`${inp} !text-base mb-2`;
+  setPop(mHead('Customer debts','notebook-pen')+`<div class="rounded-2xl p-4 bg-slate-100 dark:bg-slate-800 mb-3"><div class="${sub}">Customers owe you</div><div class="text-3xl font-black num text-rose-400">${fmt(owed)}</div><div class="${sub}">${open.length} open</div></div>
+  ${open.length?open.map(x=>{const rem=x.amount-x.paid,days=Math.floor((Date.now()-new Date(x.created_at))/864e5),
+    link=waLink(x.phone,'Hello '+x.name+', a friendly reminder that you owe '+fmt(rem)+(plan.business?' at '+plan.business:'')+'. Thank you.');
+    return `<div class="rounded-xl p-3 border border-slate-200 dark:border-slate-800 mb-2"><div class="flex items-center"><b>${x.name.replace(/</g,'&lt;')}</b><b class="ml-auto num text-rose-400">${fmt(rem)}</b></div>
+    <div class="${sub}">${days===0?'today':days+' day'+(days===1?'':'s')+' ago'}${x.paid>0?' · paid '+fmt(x.paid)+' of '+fmt(x.amount):''}${x.note?' · '+x.note.replace(/</g,'&lt;'):''}</div>
+    <div class="flex gap-2 mt-2"><button class="${btn} !py-2 text-sm flex-1 bg-emerald-400 text-slate-950" onclick="payDebt(${x.id})">Record payment</button>
+    ${link?`<a href="${link}" target="_blank" rel="noopener" class="${btn} !py-2 text-sm bg-slate-200 dark:bg-slate-800 text-center">Remind</a>`:''}</div></div>`}).join(''):`<div class="${sub} mb-3">No open debts.</div>`}
+  <div class="font-bold mt-4 mb-2">Add a debt</div>
+  <input id="d_n" class="${inp2}" placeholder="Customer name"><input id="d_p" type="tel" class="${inp2}" placeholder="Phone (for WhatsApp reminder)">
+  <input id="d_a" type="number" inputmode="numeric" class="${inp2}" placeholder="Amount owed (₦)"><input id="d_o" class="${inp2}" placeholder="Note (optional)">
+  ${shiftOpen()?`<label class="flex items-center gap-2 text-sm mb-3"><input id="d_c" type="checkbox" checked class="w-4 h-4"> Cash was taken from my drawer (adds to today’s ledger)</label>`:`<div class="${sub} mb-3">No open shift, so this won’t change today’s drawer count.</div>`}
+  <button class="${btn} w-full bg-emerald-400 text-slate-950" onclick="addDebt()">Save debt</button>`);
+}
+async function addDebt(){
+  const name=$('#d_n').value.trim(),a=v('d_a');
+  if(!name||a<=0)return toast('Enter a name and amount','bg-rose-500 text-white');
+  const {error}=await sb.from('debts').insert({user_id:BIZ,name,phone:$('#d_p').value.trim(),amount:a,note:$('#d_o').value.trim()});
+  if(error)return toast('Could not save: '+error.message,'bg-rose-500 text-white');
+  if($('#d_c')&&$('#d_c').checked)ledger('d',a,'',name);
+  toast('Debt recorded');openDebts();
+}
+function payDebt(id){
+  const x=debtRows.find(r=>r.id===id),rem=x.amount-x.paid;
+  modal(`<h3 class="text-xl font-bold mb-1">Payment from ${x.name.replace(/</g,'&lt;')}</h3><p class="text-sm text-slate-500 dark:text-slate-400 mb-4">Still owes ${fmt(rem)}.</p>
+  <input id="p_a" type="number" inputmode="numeric" class="${inp}" value="${rem}">
+  <select id="p_m" class="${inp} mt-3 !text-base">${shiftOpen()?'<option value="cash">Paid cash (into drawer)</option><option value="transfer">Paid by transfer (to account)</option>':''}<option value="none">Don’t add to today’s ledger</option></select>
+  <button class="${btn} w-full mt-4 bg-emerald-400 text-slate-950" onclick="doPay(${id})">Save payment</button>`);
+}
+async function doPay(id){
+  const x=debtRows.find(r=>r.id===id),a=v('p_a'),m=$('#p_m').value,rem=x.amount-x.paid;
+  if(a<=0||a>rem)return toast('Enter an amount up to '+fmt(rem),'bg-rose-500 text-white');
+  const np=Number(x.paid)+a;
+  const {error}=await sb.from('debts').update({paid:np,settled_at:np>=x.amount?new Date().toISOString():null}).eq('id',id);
+  if(error)return toast('Could not save: '+error.message,'bg-rose-500 text-white');
+  if(m!=='none')ledger('r',a,m,x.name);
+  toast(np>=x.amount?x.name+' has paid in full':'Payment recorded');openDebts();
+}
+
+// ===== EXPENSES & NET PROFIT (Premium, owner) =====
+const EXP=['Rent','Generator / fuel','Staff wages','Data & airtime','Terminal / maintenance','Other'];
+async function openExpenses(){
+  modal('<div class="text-sm text-slate-500">Loading…</div>');
+  if(!premium)return setPop(mHead('Expenses & net profit','wallet')+lockBox('Expenses and net profit'));
+  const ms=ymd().slice(0,8)+'01';
+  const [a,b]=await Promise.all([sb.from('expenses').select('*').gte('date',ms).order('date',{ascending:false}),sb.from('shifts').select('data').gte('date',ms)]);
+  if(a.error)return setPop(mHead('Expenses & net profit','wallet')+'<div class="text-sm text-rose-500">Could not load: '+a.error.message+'</div>');
+  const ex=a.data||[],tot=sum(ex,x=>+x.amount),comm=sum(b.data||[],r=>stats(r.data).profit),net=comm-tot,cat={};
+  ex.forEach(x=>cat[x.category]=(cat[x.category]||0)+ +x.amount);
+  const sub='text-xs text-slate-500 dark:text-slate-400',inp2=`${inp} !text-base mb-2`;
+  setPop(mHead('Expenses & net profit','wallet')+`<div class="${sub} mb-2">${new Date().toLocaleDateString('en-NG',{month:'long',year:'numeric'})}</div>
+  <div class="rounded-2xl p-4 bg-slate-100 dark:bg-slate-800 space-y-1"><div class="flex justify-between text-sm"><span>Commissions earned</span><b class="num text-emerald-500">${fmt(comm)}</b></div>
+  <div class="flex justify-between text-sm"><span>Expenses</span><b class="num text-rose-400">${fmt(tot)}</b></div>
+  <div class="flex justify-between border-t border-slate-300 dark:border-slate-700 pt-2"><b>Net profit (what you keep)</b><b class="num text-xl ${net<0?'text-rose-500':'text-emerald-500'}">${fmt(net)}</b></div></div>
+  ${Object.keys(cat).length?`<div class="mt-3 text-sm">${Object.keys(cat).map(k=>`<div class="flex justify-between py-1"><span>${k}</span><b class="num">${fmt(cat[k])}</b></div>`).join('')}</div>`:''}
+  ${ex.slice(0,15).map(x=>`<div class="flex items-center text-sm py-2 border-t border-slate-200 dark:border-slate-800"><div class="min-w-0 flex-1"><div>${x.category}${x.note?' · '+x.note.replace(/</g,'&lt;'):''}</div><div class="${sub}">${x.date}</div></div><b class="num">${fmt(+x.amount)}</b><button class="text-xs text-rose-500 ml-3" onclick="delExpense(${x.id},this)">remove</button></div>`).join('')}
+  <div class="font-bold mt-4 mb-2">Add an expense</div>
+  <select id="e_c" class="${inp2}">${EXP.map(c=>`<option>${c}</option>`).join('')}</select>
+  <input id="e_a" type="number" inputmode="numeric" class="${inp2}" placeholder="Amount (₦)"><input id="e_n" class="${inp2}" placeholder="Note (optional)">
+  <button class="${btn} w-full bg-emerald-400 text-slate-950" onclick="addExpense()">Save expense</button>`);
+}
+async function addExpense(){
+  const a=v('e_a');if(a<=0)return toast('Enter an amount','bg-rose-500 text-white');
+  const {error}=await sb.from('expenses').insert({user_id:BIZ,category:$('#e_c').value,amount:a,note:$('#e_n').value.trim(),date:ymd()});
+  if(error)return toast('Could not save: '+error.message,'bg-rose-500 text-white');
+  toast('Expense saved');openExpenses();
+}
+async function delExpense(id,b){
+  if(!b.dataset.s){b.dataset.s=1;b.textContent='sure?';setTimeout(()=>{b.dataset.s='';b.textContent='remove'},3000);return}
+  await sb.from('expenses').delete().eq('id',id);openExpenses();
+}
+
+// ===== INSTALL AS APP (PWA) =====
+let deferredInstall=null;
+const isStandalone=()=>window.matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
+const isIOS=()=>/iphone|ipad|ipod/i.test(navigator.userAgent);
+const installHidden=()=>{try{return +localStorage.getItem('pwa_hide')>Date.now()}catch(e){return false}};
+function installCard(){
+  if(isStandalone()||installHidden()||(!deferredInstall&&!isIOS()))return '';
+  return `<section class="rounded-2xl p-4 bg-sky-400/10 border border-sky-400/30 flex items-center gap-3"><i data-lucide="smartphone" class="w-6 h-6 text-sky-400 shrink-0"></i>
+  <div class="flex-1 text-sm"><b>Install POS Assistant</b><div class="text-slate-500 dark:text-slate-400">${deferredInstall?'Open it from your home screen like an app.':'Tap the Share button, then “Add to Home Screen”.'}</div></div>
+  ${deferredInstall?`<button class="${btn} !py-2 bg-sky-400 text-slate-950" onclick="doInstall()">Install</button>`:''}
+  <button class="text-xs text-slate-500" onclick="hideInstall()">Not now</button></section>`;
+}
+async function doInstall(){if(!deferredInstall)return;deferredInstall.prompt();try{await deferredInstall.userChoice}catch(e){}deferredInstall=null;render()}
+function hideInstall(){try{localStorage.setItem('pwa_hide',Date.now()+7*864e5)}catch(e){}render()}
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstall=e;if(S&&(user||!cloud))render()});
+window.addEventListener('appinstalled',()=>{deferredInstall=null;if(S&&(user||!cloud))render()});
+if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+
 async function boot(){
   if(!cloud){load(K);render();return}
   const sim=$('#sim');if(sim)sim.closest('label').style.display='none';
