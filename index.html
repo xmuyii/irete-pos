@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Irete Labs · POS Ledger</title>
+<script>try{var t=localStorage.getItem('irete_theme');if(t==='light')document.documentElement.classList.remove('dark')}catch(e){}</script>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script>tailwind.config={darkMode:'class'}</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="https://js.paystack.co/v1/inline.js"></script>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.num{font-variant-numeric:tabular-nums}
+.card{@apply rounded-2xl}
+@keyframes pop{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.pop{animation:pop .35s ease}
+input:focus{outline:2px solid #34d399}
+</style>
+</head>
+<body class="bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100 min-h-screen">
+<header class="sticky top-0 z-30 bg-white/90 dark:bg-slate-950/90 backdrop-blur border-b border-slate-200 dark:border-slate-800">
+  <div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
+    <div class="w-9 h-9 rounded-xl bg-emerald-400 text-slate-950 grid place-items-center font-black">I</div>
+    <div class="leading-tight"><div class="font-bold">Irete Labs</div><div class="text-xs text-slate-500 dark:text-slate-400">POS Ledger</div></div>
+    <div class="ml-auto flex items-center gap-2">
+      <label class="flex items-center gap-2 text-xs cursor-pointer select-none">
+        <span class="hidden sm:inline text-slate-500 dark:text-slate-400">Auto-simulate terminal</span>
+        <span class="sm:hidden text-slate-500 dark:text-slate-400">Sim</span>
+        <input id="sim" type="checkbox" class="sr-only peer">
+        <span class="w-10 h-6 rounded-full bg-slate-300 dark:bg-slate-700 peer-checked:bg-emerald-400 relative transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-5 after:h-5 after:rounded-full after:bg-white after:transition peer-checked:after:translate-x-4"></span>
+      </label>
+      <span id="cs" class="hidden sm:inline text-xs text-slate-500 dark:text-slate-400"></span>
+      <button id="prem" class="p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 hidden text-amber-400" aria-label="Premium"><i data-lucide="crown" class="w-5 h-5"></i></button>
+      <button id="team" class="p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 hidden" aria-label="Team"><i data-lucide="users" class="w-5 h-5"></i></button>
+      <button id="theme" class="p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800" aria-label="Toggle theme"><i data-lucide="sun-moon" class="w-5 h-5"></i></button>
+      <button id="cfg" class="p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800" aria-label="Settings"><i data-lucide="settings" class="w-5 h-5"></i></button>
+      <button id="out" class="p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 hidden" aria-label="Sign out"><i data-lucide="log-out" class="w-5 h-5"></i></button>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-6xl mx-auto px-4 py-4 space-y-4" id="app"></main>
+<div id="modal"></div>
+<div id="auth"></div>
+<div id="toast" class="fixed left-1/2 -translate-x-1/2 bottom-6 z-50 pointer-events-none"></div>
+
+<script>
+const K='irete_pos_v1',$=s=>document.querySelector(s);
+const ymd=(off=0)=>new Date(Date.now()-off*864e5).toLocaleDateString('en-CA');
+const fmt=n=>(n<0?'-':'')+'₦'+Math.abs(Math.round(n)).toLocaleString('en-NG');
+const DEF={set:{wMode:'manual',wVal:0,tMode:'manual',tVal:0,blk:10000,pct:0,cap:0,low:20000},day:null,hist:[]};
+// ===== CLOUD CONFIG: fill these in (leave SB_URL empty to run in local-only mode) =====
+const SB_URL='https://acfdvuhikpbiqmplhowx.supabase.co',SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFjZmR2dWhpa3BiaXFtcGxob3d4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM2OTgzNDYsImV4cCI6MjEwOTI3NDM0Nn0.rTSVmt3X731kb8jLXKnI52jftF9WbhkMUAzqWsxYS8E',PAYSTACK_KEY='',PRICE_NGN=3000;
+const cloud=!!(SB_URL&&SB_KEY);
+let KEY=K,S,sb,user=null,okAccess=true,acc={},syncT=null,pollT=null;
+const clone=o=>JSON.parse(JSON.stringify(o));
+const newDay=()=>({id:Date.now(),date:ymd(),open:null,inj:[],tx:[],closed:null,del:[],idel:[]});
+function load(key){
+  KEY=key;try{S=JSON.parse(localStorage.getItem(KEY))||clone(DEF)}catch(e){S=clone(DEF)}
+  S.set=Object.assign({},DEF.set,S.set);S.hist=S.hist||[];
+  if(!S.day)S.day=newDay();
+  if(S.day.date!==ymd()){ // archive a stale unreconciled shift
+    if(!S.day.closed&&S.day.open!==null){S.day.closed={auto:true};S.hist.push(S.day)}
+    S.day=newDay();
+  }
+  persist();
+}
+const persist=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}};
+const save=()=>{persist();queueSync()};
+
+// ---- business maths ----
+// Withdrawal: customer swipes amount+fee, gets cash=amount. Processor cost = pct% capped.
+// Transfer: customer sends amount to our bank, gets cash = amount - fee.
+function calc(a,type){
+  const s=S.set,w=type==='w',m=w?s.wMode:s.tMode,x=w?s.wVal:s.tVal;
+  const fee=m==='fixed'?x:m==='pct'?a*x/100:m==='block'?Math.ceil(a/(s.blk||10000))*x:0;
+  return {fee:Math.round(fee),cost:w?Math.min(a*s.pct/100,s.cap||Infinity):0};
+}
+function mk(a,type,fee,cost,src,ref,t,cash){
+  const w=type==='w',co=w?a:(cash!=null?cash:a-fee),fe=w?fee:a-co,di=w?a+fee-cost:a;
+  return {id:Math.random().toString(36).slice(2),t:t||Date.now(),type,a,fee:fe,cost,cashOut:co,digIn:di,profit:fe-cost,src:src||'manual',ref:ref||''};
+}
+const sum=(arr,f)=>arr.reduce((x,y)=>x+f(y),0);
+function stats(d){
+  const inj=sum(d.inj,i=>i.a),cashOut=sum(d.tx,t=>t.cashOut),digIn=sum(d.tx,t=>t.digIn);
+  return {inj,cashOut,digIn,vol:sum(d.tx,t=>t.a),profit:sum(d.tx,t=>t.profit),n:d.tx.length,
+    drawer:(d.open||0)+inj-cashOut, expCash:(d.open||0)+inj-cashOut};
+}
+
+// ---- UI helpers ----
+const inp='w-full rounded-xl px-4 py-3 text-lg num bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700';
+const btn='rounded-xl px-4 py-3 font-semibold transition active:scale-95';
+function modal(html){
+  $('#modal').innerHTML=`<div class="fixed inset-0 z-40 bg-black/60 grid items-end sm:place-items-center" onclick="if(event.target===this)closeM()">
+  <div class="pop w-full sm:max-w-md bg-white dark:bg-slate-900 rounded-t-3xl sm:rounded-3xl p-5 max-h-[92vh] overflow-y-auto" style="padding-bottom:max(1.25rem,env(safe-area-inset-bottom))">${html}</div></div>`;
+  lucide.createIcons();
+}
+const closeM=()=>$('#modal').innerHTML='';
+function toast(msg,cls='bg-emerald-400 text-slate-950'){
+  const e=document.createElement('div');e.className='pop px-4 py-2 mb-2 rounded-xl text-sm font-semibold shadow-lg '+cls;e.textContent=msg;
+  $('#toast').appendChild(e);setTimeout(()=>e.remove(),2600);
+}
+const v=id=>parseFloat($('#'+id).value)||0;
+
+// ---- actions ----
+function startDay(){
+  const o=v('f_open');if(o<0)return;
+  S.day.open=o;save();closeM();render();toast('Opening float set: '+fmt(o));
+}
+function openStart(edit){modal(`<h3 class="text-xl font-bold mb-1">${edit?'Edit opening float':'Start the day'}</h3><p class="text-sm text-slate-500 dark:text-slate-400 mb-4">Cash you started the day with in the drawer.</p>
+  <input id="f_open" type="number" inputmode="numeric" class="${inp}" placeholder="Opening cash float (₦)" value="${edit?S.day.open:''}" autofocus>
+  <button class="${btn} w-full mt-4 bg-emerald-400 text-slate-950" onclick="startDay()">${edit?'Save':'Open session'}</button>`)}
+function openInject(){modal(`<h3 class="text-xl font-bold mb-1">Cash injection</h3><p class="text-sm text-slate-500 dark:text-slate-400 mb-4">Extra physical cash added to the till.</p>
+  <input id="f_inj" type="number" inputmode="numeric" class="${inp}" placeholder="Amount (₦)" autofocus>
+  <input id="f_note" class="${inp} mt-3 !text-base" placeholder="Note (optional, e.g. from owner)">
+  <button class="${btn} w-full mt-4 bg-sky-400 text-slate-950" onclick="doInject()">Add cash to drawer</button>`)}
+function doInject(){const a=v('f_inj');if(a<=0)return toast('Enter an amount','bg-rose-500 text-white');
+  S.day.inj.push({a,t:Date.now(),note:$('#f_note').value});save();closeM();render();toast(fmt(a)+' added to drawer','bg-sky-400 text-slate-950')}
+
+let feeTouched=false;
+function openTxn(type){
+  feeTouched=false;const w=type==='w';
+  modal(`<h3 class="text-xl font-bold mb-1">${w?'Cash withdrawal':'Transfer received'}</h3>
+  <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">${w?'Customer swipes card (amount + your charge), you give cash.':'Customer sends money to your account, you give cash.'}</p>
+  <label class="block text-xs mb-1 text-slate-500 dark:text-slate-400">${w?'Cash amount':'Amount received in account'} (₦)</label>
+  <input id="f_amt" type="number" inputmode="numeric" class="${inp}" oninput="prev('${type}','a')" autofocus>
+  <div class="grid grid-cols-4 gap-2 mt-2">${[5000,10000,20000,50000].map(x=>`<button class="text-xs py-2 rounded-lg bg-slate-200 dark:bg-slate-800" onclick="$('#f_amt').value=${x};prev('${type}','a')">${x/1000}k</button>`).join('')}</div>
+  <label class="block text-xs mt-4 mb-1 text-slate-500 dark:text-slate-400">Your charge (₦)</label>
+  <input id="f_fee" type="number" inputmode="numeric" class="${inp}" oninput="prev('${type}','f')">
+  ${w?'':`<label class="block text-xs mt-3 mb-1 text-slate-500 dark:text-slate-400">Cash given to customer (₦)</label>
+  <input id="f_cash" type="number" inputmode="numeric" class="${inp}" oninput="prev('t','c')">`}
+  <input id="f_ref" class="${inp} mt-3 !text-base" placeholder="Customer / bank ref (optional)">
+  <div id="prev" class="mt-4 rounded-xl p-3 bg-slate-100 dark:bg-slate-800 text-sm space-y-1"></div>
+  <button class="${btn} w-full mt-4 ${w?'bg-amber-400':'bg-emerald-400'} text-slate-950" onclick="doTxn('${type}')">Record transaction</button>`);
+  prev(type,'a');
+}
+function prev(type,src){
+  const a=v('f_amt'),w=type==='w';
+  if(src==='f'||src==='c')feeTouched=true;
+  if(src==='a'&&!feeTouched){const f=calc(a,type).fee;$('#f_fee').value=a>0&&f?f:''}
+  if(src==='c')$('#f_fee').value=a>0?a-v('f_cash'):'';
+  const fee=v('f_fee');
+  if(!w&&src!=='c')$('#f_cash').value=a>0?a-fee:'';
+  const t=mk(a,type,fee,w?calc(a,type).cost:0,0,0,0,w?null:v('f_cash'));
+  $('#prev').innerHTML=a>0?`<div class="flex justify-between"><span>Cash to give</span><b class="num">${fmt(t.cashOut)}</b></div>
+  <div class="flex justify-between"><span>${w?'Digital received (card + charge)':'Digital received'}</span><b class="num">${fmt(t.digIn)}</b></div>
+  ${t.cost?`<div class="flex justify-between"><span>Processor cost</span><b class="num">${fmt(t.cost)}</b></div>`:''}
+  <div class="flex justify-between ${t.profit<0?'text-rose-500':'text-emerald-500'}"><span>Your profit</span><b class="num">${fmt(t.profit)}</b></div>`:'<span class="text-slate-500">Enter an amount to preview.</span>';
+}
+function doTxn(type){
+  const a=v('f_amt'),w=type==='w';
+  if(a<=0)return toast('Enter an amount','bg-rose-500 text-white');
+  const t=mk(a,type,v('f_fee'),w?calc(a,type).cost:0,'manual',$('#f_ref').value,0,w?null:v('f_cash'));
+  if(t.cashOut<0)return toast('Cash given cannot be negative','bg-rose-500 text-white');
+  const short=t.cashOut>stats(S.day).drawer;
+  S.day.tx.unshift(t);save();closeM();render();
+  toast((w?'Withdrawal ':'Transfer ')+fmt(a)+' recorded · profit '+fmt(t.profit));
+  if(short)setTimeout(()=>toast('Drawer cash is now negative: check float/injections','bg-rose-500 text-white'),400);
+}
+function voidTx(id,b){
+  if(!b.dataset.s){b.dataset.s=1;b.textContent='tap again to void';setTimeout(()=>{b.dataset.s='';b.textContent='void'},3000);return}
+  (S.day.del=S.day.del||[]).push(id);S.day.tx=S.day.tx.filter(t=>t.id!==id);save();render();
+}
+function delInj(i,b){
+  if(!b.dataset.s){b.dataset.s=1;b.textContent='sure?';setTimeout(()=>{b.dataset.s='';b.textContent='remove'},3000);return}
+  (S.day.idel=S.day.idel||[]).push(S.day.inj[i].t);S.day.inj.splice(i,1);save();render();
+}
+function eraseAll(b){
+  if(!b.dataset.s){b.dataset.s=1;b.textContent='Tap again to erase everything';return}
+  localStorage.removeItem(KEY);location.reload();
+}
+function openClose(){
+  const st=stats(S.day);
+  modal(`<h3 class="text-xl font-bold mb-1">Close day / shift balance</h3>
+  <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">Count the physical cash in your drawer.</p>
+  <label class="block text-xs mb-1 text-slate-500 dark:text-slate-400">Physical cash counted</label>
+  <input id="f_cnt" type="number" inputmode="numeric" class="${inp}" oninput="recon()" autofocus>
+  <label class="block text-xs mt-3 mb-1 text-slate-500 dark:text-slate-400">Bank received today (optional, from statement)</label>
+  <input id="f_bank" type="number" inputmode="numeric" class="${inp}" oninput="recon()">
+  <div class="mt-4 rounded-xl p-3 bg-slate-100 dark:bg-slate-800 text-sm space-y-1">
+    <div class="flex justify-between"><span>Expected cash</span><b class="num">${fmt(st.expCash)}</b></div>
+    <div class="flex justify-between"><span>Expected digital inflow</span><b class="num">${fmt(st.digIn)}</b></div>
+    <div class="flex justify-between"><span>Net profit today</span><b class="num text-emerald-500">${fmt(st.profit)}</b></div>
+  </div>
+  <div id="rc" class="mt-3"></div>
+  <button class="${btn} w-full mt-4 bg-rose-500 text-white" onclick="doClose()">Close &amp; lock day</button>`);
+}
+function rec(){
+  const st=stats(S.day),cnt=v('f_cnt'),bk=$('#f_bank').value;
+  const vc=cnt-st.expCash,vb=bk===''?null:parseFloat(bk)-st.digIn;
+  return {st,cnt,vc,vb,bk};
+}
+function flag(label,x){
+  const c=x===0?'bg-emerald-500/15 text-emerald-500':x>0?'bg-emerald-500/15 text-emerald-500':'bg-rose-500/15 text-rose-500';
+  const w=x===0?'BALANCED':x>0?'OVERAGE +'+fmt(x):'SHORTAGE '+fmt(x);
+  return `<div class="rounded-xl p-3 ${c} flex justify-between items-center"><span class="text-sm">${label}</span><b class="text-base num">${w}</b></div>`;
+}
+function recon(){
+  if($('#f_cnt').value==='')return $('#rc').innerHTML='';
+  const r=rec();
+  $('#rc').innerHTML=`<div class="space-y-2">${flag('Cash',r.vc)}${r.vb===null?'':flag('Digital',r.vb)}</div>`;
+}
+function doClose(){
+  if($('#f_cnt').value==='')return toast('Enter counted cash','bg-rose-500 text-white');
+  const r=rec();
+  S.day.closed={at:Date.now(),counted:r.cnt,varCash:r.vc,bankSeen:r.bk===''?null:parseFloat(r.bk),varBank:r.vb,expCash:r.st.expCash,expBank:r.st.digIn};
+  S.hist.push(S.day);save();closeM();$('#sim').checked=false;stopSim();render();
+}
+function newShift(){S.day=newDay();save();render()}
+
+function openCfg(){
+  const s=S.set,sel=(id,m)=>`<select id="${id}" class="${inp} !text-base">${[['manual','I enter it each time'],['fixed','Fixed ₦ per transaction'],['pct','% of amount'],['block','₦ per block of amount']].map(o=>`<option value="${o[0]}" ${o[0]===m?'selected':''}>${o[1]}</option>`).join('')}</select>`;
+  const f=(id,l,x)=>`<label class="block text-xs mt-3 mb-1 text-slate-500 dark:text-slate-400">${l}</label><input id="${id}" type="number" step="any" class="${inp}" value="${x}">`;
+  modal(`<h3 class="text-xl font-bold">Your charges</h3><p class="text-sm text-slate-500 dark:text-slate-400">You decide how fees work. The charge is always editable on each transaction.</p>
+  <div class="font-semibold mt-4">Withdrawals</div>${sel('s_wm',s.wMode)}${f('s_wv','Value (₦ or %, ignored if “each time”)',s.wVal)}
+  <div class="font-semibold mt-4">Transfers</div>${sel('s_tm',s.tMode)}${f('s_tv','Value (₦ or %, ignored if “each time”)',s.tVal)}
+  ${f('s_b','Block size for “per block” (₦)',s.blk)}
+  <div class="font-semibold mt-4">Optional: your own cost</div>
+  ${f('s_p','Processor cost on withdrawals (% of amount, 0 if none)',s.pct)}${f('s_c','Cost cap per transaction (₦, 0 = no cap)',s.cap)}
+  ${f('s_l','Low-cash warning below (₦)',s.low)}
+  <button class="${btn} w-full mt-4 bg-emerald-400 text-slate-950" onclick="saveCfg()">Save</button>
+  <button class="${btn} w-full mt-2 bg-slate-200 dark:bg-slate-800" onclick="demo()" ${cloud?'hidden':''}>Load 6 days of demo history</button>
+  <button class="${btn} w-full mt-2 text-rose-500 border border-rose-500/40" onclick="eraseAll(this)" ${cloud?'hidden':''}>Erase all data</button>`);
+}
+function saveCfg(){S.set={wMode:$('#s_wm').value,wVal:v('s_wv'),tMode:$('#s_tm').value,tVal:v('s_tv'),blk:v('s_b')||10000,pct:v('s_p'),cap:v('s_c'),low:v('s_l')};save();closeM();render();pushSet();toast('Charges saved')}
+function demo(){
+  S.hist=S.hist.filter(d=>!d.demo);
+  for(let i=6;i>=1;i--){
+    const d=newDay();d.id=i;d.demo=1;d.date=ymd(i);d.open=50000;
+    const n=12+Math.floor(Math.random()*14);
+    for(let k=0;k<n;k++){const a=[2000,5000,10000,15000,20000,30000,50000][Math.floor(Math.random()*7)],ty=Math.random()<.6?'w':'t';d.tx.push(mk(a,ty,Math.ceil(a/10000)*100,0,'demo'));}
+    const st=stats(d);d.closed={at:Date.now(),counted:st.expCash,varCash:0,expCash:st.expCash,expBank:st.digIn};S.hist.push(d);
+  }
+  save();closeM();render();
+}
+
+// ---- simulator ----
+let simT=null;const BANKS=['GTBank','Access','Zenith','UBA','First Bank','Opay','Moniepoint','Kuda'];
+function stopSim(){clearInterval(simT);simT=null}
+function simTick(){
+  const d=S.day;if(d.open===null||d.closed)return;
+  const a=[2000,3000,5000,10000,15000,20000,30000,50000][Math.floor(Math.random()*8)];
+  let ty=Math.random()<.6?'w':'t';if(ty==='w'&&a>stats(d).drawer)ty='t';
+  const c=calc(a,ty),t=mk(a,ty,c.fee||Math.ceil(a/10000)*100,c.cost,'terminal',BANKS[Math.floor(Math.random()*BANKS.length)]);
+  if(t.cashOut>stats(d).drawer)return toast('Terminal skipped: drawer too low','bg-rose-500 text-white');
+  d.tx.unshift(t);save();render();toast('Terminal: '+(ty==='w'?'Withdrawal ':'Transfer ')+fmt(a));
+}
+$('#sim').onchange=e=>{
+  if(!e.target.checked)return stopSim();
+  if(S.day.open===null||S.day.closed){e.target.checked=false;return toast('Start a day first','bg-rose-500 text-white')}
+  simT=setInterval(simTick,3500);simTick();
+};
+$('#cfg').onclick=openCfg;
+$('#theme').onclick=()=>{const d=document.documentElement.classList.toggle('dark');try{localStorage.setItem('irete_theme',d?'dark':'light')}catch(e){}render()};
+
+// ---- render ----
+let charts={};
+function render(){
+  const d=S.day,st=stats(d),low=st.drawer<S.set.low,open=d.open!==null,closed=!!d.closed;
+  const card='rounded-2xl p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800';
+  const sub='text-xs text-slate-500 dark:text-slate-400';
+  const sum4=[['Total volume',fmt(st.vol),'text-sky-500','trending-up'],['Commissions earned',fmt(st.profit),'text-emerald-500','coins'],['Transactions',st.n,'text-violet-400','receipt'],
+    ['Cash liquidity',low&&open?'LOW':'Healthy',low&&open?'text-rose-500':'text-emerald-500','droplet']];
+  $('#app').innerHTML=`
+  <section class="${card} flex flex-wrap items-center gap-3">
+    <div><div class="${sub}">${new Date().toLocaleDateString('en-NG',{weekday:'long',day:'numeric',month:'long'})}${acc.txt?' · '+acc.txt:''}</div>
+      <div class="font-bold text-lg">${!open?'No active session':closed?'Day closed':'Session open'}
+      ${open?`<span class="text-sm font-normal ${sub}">· float ${fmt(d.open)}</span>`:''}</div></div>
+    <div class="ml-auto flex gap-2 flex-wrap">
+      ${!open?`<button class="${btn} bg-emerald-400 text-slate-950" onclick="openStart()">Start day</button>`:
+        closed?`<button class="${btn} bg-emerald-400 text-slate-950" onclick="newShift()">Start new shift</button>`:
+        `<button class="${btn} bg-sky-400/15 text-sky-500" onclick="openInject()">+ Inject cash</button><button class="${btn} bg-rose-500 text-white" onclick="openClose()">Close day</button>`}
+    </div></section>
+
+  <section class="${card}">
+    <div class="font-bold mb-3 flex items-center gap-2"><i data-lucide="calculator" class="w-4 h-4"></i>Today’s tally <span class="text-xs font-normal ${sub}">(calculated automatically)</span></div>
+    <div class="grid grid-cols-3 gap-2 text-center">
+      <div class="rounded-xl p-3 bg-slate-100 dark:bg-slate-800"><div class="${sub}">Started with</div><div class="text-lg sm:text-2xl font-black num text-amber-400">${open?fmt(d.open):'—'}</div>${open&&!closed?`<button class="text-xs text-sky-500" onclick="openStart(1)">edit</button>`:''}</div>
+      <div class="rounded-xl p-3 bg-slate-100 dark:bg-slate-800"><div class="${sub}">Injected</div><div class="text-lg sm:text-2xl font-black num text-sky-400">${fmt(st.inj)}</div><div class="${sub}">${d.inj.length} time${d.inj.length===1?'':'s'}</div></div>
+      <div class="rounded-xl p-3 bg-slate-100 dark:bg-slate-800"><div class="${sub}">Total profit</div><div class="text-lg sm:text-2xl font-black num text-emerald-500">${fmt(st.profit)}</div><div class="${sub}">${st.n} txns</div></div>
+    </div>
+    <div class="mt-3 text-sm space-y-1">
+      <div class="flex justify-between"><span>Cash in drawer now</span><b class="num">${fmt(st.drawer)}</b></div>
+      <div class="flex justify-between"><span>Bank / digital received</span><b class="num">${fmt(st.digIn)}</b></div>
+      <div class="flex justify-between border-t border-slate-200 dark:border-slate-800 pt-1"><span>Total money (started + injected + profit)</span><b class="num">${fmt((d.open||0)+st.inj+st.profit)}</b></div>
+    </div>
+    ${d.inj.length?`<div class="mt-3 text-xs ${sub}">Injections:</div>${d.inj.map((x,i)=>`<div class="flex justify-between text-sm py-1"><span>${new Date(x.t).toLocaleTimeString('en-NG',{hour:'2-digit',minute:'2-digit'})}${x.note?' · '+x.note.replace(/</g,'&lt;'):''}</span><span><b class="num">${fmt(x.a)}</b>${closed?'':` <button class="text-xs text-rose-500 ml-2" onclick="delInj(${i},this)">remove</button>`}</span></div>`).join('')}`:''}
+  </section>
+
+  <section class="grid grid-cols-2 lg:grid-cols-4 gap-3">${sum4.map(c=>`<div class="${card}"><div class="flex justify-between ${sub}">${c[0]}<i data-lucide="${c[3]}" class="w-4 h-4"></i></div><div class="text-xl sm:text-2xl font-extrabold num mt-1 ${c[2]}">${c[1]}</div></div>`).join('')}</section>
+
+  <section class="grid sm:grid-cols-2 gap-3">
+    <div class="${card} ${low&&open?'!border-rose-500':''}"><div class="${sub} flex items-center gap-2"><i data-lucide="banknote" class="w-4 h-4"></i>Cash in drawer</div>
+      <div class="text-3xl font-black num text-amber-400 mt-1">${fmt(st.drawer)}</div>
+      <div class="${sub} mt-1">Float ${fmt(d.open||0)} + injections ${fmt(st.inj)} − paid out ${fmt(st.cashOut)}</div>
+      ${low&&open?`<div class="mt-2 text-sm font-bold text-rose-500">Low cash: inject more before the next withdrawal</div>`:''}</div>
+    <div class="${card}"><div class="${sub} flex items-center gap-2"><i data-lucide="landmark" class="w-4 h-4"></i>Digital inflow (bank)</div>
+      <div class="text-3xl font-black num text-sky-400 mt-1">${fmt(st.digIn)}</div>
+      <div class="${sub} mt-1">Card settlements + transfers received today</div></div>
+  </section>
+
+  <section class="grid grid-cols-2 gap-3">
+    <button ${!open||closed?'disabled':''} class="${btn} !py-5 text-left bg-amber-400 text-slate-950 disabled:opacity-40" onclick="openTxn('w')"><i data-lucide="credit-card" class="w-6 h-6 mb-1"></i><div>Cash withdrawal</div><div class="text-xs font-normal opacity-70">Card in, cash out</div></button>
+    <button ${!open||closed?'disabled':''} class="${btn} !py-5 text-left bg-emerald-400 text-slate-950 disabled:opacity-40" onclick="openTxn('t')"><i data-lucide="arrow-left-right" class="w-6 h-6 mb-1"></i><div>Transfer / deposit</div><div class="text-xs font-normal opacity-70">Money in, cash out</div></button>
+  </section>
+
+  ${closed&&d.closed.counted!==undefined?`<section class="${card}"><div class="font-bold mb-2">Day reconciliation</div><div class="space-y-2">${flag('Cash (counted '+fmt(d.closed.counted)+' vs expected '+fmt(d.closed.expCash)+')',d.closed.varCash)}${d.closed.varBank!=null?flag('Digital',d.closed.varBank):''}</div></section>`:''}
+
+  <section class="grid lg:grid-cols-3 gap-3">
+    <div class="${card}"><div class="font-bold text-sm mb-2">Daily turnover</div><div class="h-48"><canvas id="c1"></canvas></div></div>
+    <div class="${card}"><div class="font-bold text-sm mb-2">Cash vs digital volume</div><div class="h-48"><canvas id="c2"></canvas></div></div>
+    <div class="${card}"><div class="font-bold text-sm mb-2">Net profit trend</div><div class="h-48"><canvas id="c3"></canvas></div></div>
+  </section>
+
+  <section class="${card}"><div class="flex items-center mb-2"><div class="font-bold">Today’s ledger</div><span class="ml-auto ${sub}">${st.n} entries</span></div>
+    <div class="divide-y divide-slate-200 dark:divide-slate-800">
+    ${d.tx.length?d.tx.map(t=>`<div class="py-3 flex items-center gap-3 ${Date.now()-t.t<4000?'pop':''}">
+      <div class="w-9 h-9 rounded-xl grid place-items-center ${t.type==='w'?'bg-amber-400/15 text-amber-400':'bg-emerald-400/15 text-emerald-400'}"><i data-lucide="${t.type==='w'?'credit-card':'arrow-left-right'}" class="w-4 h-4"></i></div>
+      <div class="min-w-0 flex-1"><div class="font-semibold num">${fmt(t.a)} <span class="text-xs font-normal ${sub}">${t.type==='w'?'Withdrawal':'Transfer'}${t.src==='terminal'?' · terminal':''}${t.ref?' · '+t.ref.replace(/</g,'&lt;'):''}</span></div>
+      <div class="${sub}">${new Date(t.t).toLocaleTimeString('en-NG',{hour:'2-digit',minute:'2-digit'})} · fee ${fmt(t.fee)} · cost ${fmt(t.cost)}</div></div>
+      <div class="text-right"><div class="font-bold text-emerald-500 num">+${fmt(t.profit)}</div>${closed?'':`<button class="text-xs text-rose-500" onclick="voidTx('${t.id}',this)">void</button>`}</div></div>`).join(''):`<div class="py-6 text-center ${sub}">No transactions yet.</div>`}
+    </div></section>
+  <section class="${card}"><div class="font-bold mb-2">Past days</div>
+    ${S.hist.length?S.hist.filter(h=>!cloud||premium||h.date>=ymd(7)).slice(-14).reverse().map(h=>{const x=stats(h),c=h.closed||{},vc=c.varCash;
+      const tag=vc==null?'<span class="text-amber-400">unreconciled</span>':vc===0?'<span class="text-emerald-500">balanced</span>':vc>0?'<span class="text-emerald-500">over '+fmt(vc)+'</span>':'<span class="text-rose-500 font-bold">short '+fmt(vc)+'</span>';
+      return `<div class="py-2 border-b border-slate-200 dark:border-slate-800 last:border-0 text-sm"><div class="flex justify-between"><b>${h.date}</b>${tag}</div>
+      <div class="${sub}">Started ${fmt(h.open||0)} · injected ${fmt(x.inj)} · <span class="text-emerald-500 font-semibold">profit ${fmt(x.profit)}</span></div></div>`}).join(''):`<div class="${sub}">Closed days will appear here with their tally.</div>`}
+  </section>
+  <footer class="text-center text-xs ${sub} pb-6">Irete Labs · data stays on this device</footer>`;
+  lucide.createIcons();drawCharts();
+}
+function drawCharts(){
+  const dark=document.documentElement.classList.contains('dark');
+  Chart.defaults.color=dark?'#94a3b8':'#475569';Chart.defaults.borderColor=dark?'#1e293b':'#e2e8f0';
+  const all=S.hist.concat(S.day.closed||S.day.open===null?[]:[S.day]),by={};
+  all.forEach(d=>{const s=stats(d),o=by[d.date]=by[d.date]||{vol:0,cash:0,dig:0,pr:0};o.vol+=s.vol;o.cash+=s.cashOut;o.dig+=s.digIn;o.pr+=s.profit});
+  const keys=Object.keys(by).sort().slice(-7),lab=keys.map(k=>k.slice(5));
+  const opt={responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{callback:x=>x>=1000?x/1000+'k':x}}}};
+  const cfgs={
+    c1:{type:'bar',data:{labels:lab,datasets:[{data:keys.map(k=>by[k].vol),backgroundColor:'#38bdf8',borderRadius:6}]},options:opt},
+    c2:{type:'bar',data:{labels:lab,datasets:[{label:'Cash out',data:keys.map(k=>by[k].cash),backgroundColor:'#fbbf24',borderRadius:4},{label:'Digital in',data:keys.map(k=>by[k].dig),backgroundColor:'#38bdf8',borderRadius:4}]},options:{...opt,plugins:{legend:{display:true,labels:{boxWidth:10}}}}},
+    c3:{type:'line',data:{labels:lab,datasets:[{data:keys.map(k=>by[k].pr),borderColor:'#34d399',backgroundColor:'rgba(52,211,153,.15)',fill:true,tension:.35,pointRadius:4}]},options:opt}
+  };
+  for(const id in cfgs){if(charts[id])charts[id].destroy();const el=$('#'+id);if(el)charts[id]=new Chart(el,cfgs[id])}
+}
+// ===== CLOUD: auth, sync, premium, staff =====
+let plan={},BIZ=null,premium=false,teamRows=[],teamNames={};
+const setCs=t=>{const e=$('#cs');if(e)e.textContent=t};
+function mergeDay(a,b){
+  const del=[...new Set([...(a.del||[]),...(b.del||[])])],idel=[...new Set([...(a.idel||[]),...(b.idel||[])])];
+  const m=new Map();[...(b.tx||[]),...(a.tx||[])].forEach(t=>m.set(t.id,t));
+  const im=new Map();[...(b.inj||[]),...(a.inj||[])].forEach(x=>im.set(x.t,x));
+  return {...a,tx:[...m.values()].filter(t=>!del.includes(t.id)).sort((x,y)=>y.t-x.t),
+    inj:[...im.values()].filter(x=>!idel.includes(x.t)).sort((x,y)=>x.t-y.t),del,idel,
+    open:a.open!==null&&a.open!==undefined?a.open:(b.open??null),closed:a.closed||b.closed||null};
+}
+const upsertHist=x=>{const i=S.hist.findIndex(h=>h.id===x.id);i<0?S.hist.push(x):S.hist[i]=x};
+async function pull(){
+  const {data:rows,error}=await sb.from('shifts').select('id,data').eq('staff_id',user.id).gte('date',ymd(premium?45:7)).order('id');
+  if(error)throw error;
+  rows.forEach(r=>{let d=r.data;
+    if(d.id===S.day.id){Object.assign(S.day,mergeDay(S.day,d));d=S.day}
+    else if(!d.closed&&(S.day.open===null||(S.day.closed&&d.id>S.day.id)))S.day=d;
+    if(d.closed)upsertHist(d);
+  });
+  S.hist.sort((a,b)=>a.id-b.id);
+}
+async function pushMissing(){
+  const m=new Map();[...S.hist,S.day].forEach(d=>{if(!d.demo&&(d.open!==null||d.tx.length))m.set(d.id,d)});
+  const rows=[...m.values()].map(d=>({user_id:BIZ,staff_id:user.id,id:d.id,date:d.date,data:d}));
+  if(rows.length)await sb.from('shifts').upsert(rows,{onConflict:'user_id,id'});
+}
+function queueSync(){if(!cloud||!user||!okAccess)return;clearTimeout(syncT);setCs('Saving…');syncT=setTimeout(pushDay,600)}
+async function pushDay(){
+  const d=S.day;if(!cloud||!user||!okAccess||(d.open===null&&!d.tx.length))return;
+  try{
+    const {data:r}=await sb.from('shifts').select('data').eq('user_id',BIZ).eq('id',d.id).maybeSingle();
+    let changed=false;
+    if(r&&r.data){const before=JSON.stringify(d),m=mergeDay(d,r.data);Object.assign(d,m);changed=before!==JSON.stringify(d)}
+    const {error}=await sb.from('shifts').upsert({user_id:BIZ,staff_id:user.id,id:d.id,date:d.date,data:d},{onConflict:'user_id,id'});
+    if(error)throw error;
+    persist();setCs('Synced');if(changed)render();
+  }catch(e){
+    if(e&&e.code==='42501'){setCs('Premium required to sync');return}
+    setCs('Offline · will retry');clearTimeout(syncT);syncT=setTimeout(pushDay,8000);
+  }
+}
+const pushSet=()=>{if(cloud&&user&&plan.role==='owner')sb.from('profiles').update({settings:S.set}).eq('user_id',user.id).then(()=>{})};
+async function checkAccess(){
+  const {data:p,error}=await sb.rpc('my_plan');if(error)throw error;
+  plan=p;BIZ=p.biz;premium=!!p.premium;
+  if(p.settings&&Object.keys(p.settings).length)S.set=Object.assign({},DEF.set,p.settings);
+  const until=p.sub_until&&new Date(p.sub_until)>Date.now()?p.sub_until:null;
+  acc={txt:(p.business?p.business+' · ':'')+(p.role==='staff'?'Attendant: '+p.name:until?'Premium until '+new Date(until).toLocaleDateString('en-NG'):premium?'Trial: '+Math.ceil((new Date(p.trial_ends)-Date.now())/864e5)+' days left':'Free plan')};
+  return p.role!=='none';
+}
+function applyRole(){
+  const st=plan.role==='staff';
+  $('#prem').classList.toggle('hidden',st);$('#team').classList.toggle('hidden',st);$('#cfg').classList.toggle('hidden',st);
+}
+function startPoll(){
+  if(pollT)return;
+  const tick=async()=>{if(!user||!okAccess||$('#modal').innerHTML||document.hidden)return;
+    try{const b=JSON.stringify(S);await pull();if(JSON.stringify(S)!==b){persist();render()}setCs('Synced')}catch(e){setCs('Offline')}};
+  pollT=setInterval(tick,20000);document.addEventListener('visibilitychange',tick);
+}
+const shell=h=>`<div class="fixed inset-0 z-50 bg-slate-100 dark:bg-slate-950 grid place-items-center p-4 overflow-y-auto"><div class="w-full max-w-sm py-6">
+  <div class="flex items-center gap-3 mb-6"><div class="w-11 h-11 rounded-xl bg-emerald-400 text-slate-950 grid place-items-center font-black text-xl">I</div><div><div class="font-bold text-lg">Irete Labs</div><div class="text-xs text-slate-500 dark:text-slate-400">POS Ledger</div></div></div>${h}</div></div>`;
+function showAuth(mode='in'){
+  const up=mode==='up';
+  $('#auth').innerHTML=shell(`<h2 class="text-2xl font-bold mb-1">${up?'Create your account':'Welcome back'}</h2>
+  <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">${up?'14-day free trial. No card needed.':'Sign in to your ledger.'}</p>
+  ${up?`<input id="a_biz" class="${inp} mb-3 !text-base" placeholder="Business name">`:''}
+  <input id="a_em" type="email" autocomplete="email" class="${inp} mb-3 !text-base" placeholder="Email">
+  <input id="a_pw" type="password" autocomplete="${up?'new-password':'current-password'}" class="${inp} !text-base" placeholder="Password (min 6 characters)">
+  <div id="aerr" class="text-sm text-rose-500 mt-3 min-h-[1.25rem]"></div>
+  <button id="abtn" class="${btn} w-full mt-2 bg-emerald-400 text-slate-950" onclick="doAuth('${mode}')">${up?'Sign up':'Sign in'}</button>
+  <button class="w-full mt-4 text-sm text-sky-500" onclick="showAuth('${up?'in':'up'}')">${up?'Have an account? Sign in':'New here? Create an account'}</button>`);
+}
+async function doAuth(mode){
+  const em=$('#a_em').value.trim(),pw=$('#a_pw').value,err=$('#aerr'),b=$('#abtn');
+  if(!em||pw.length<6){err.textContent='Enter your email and a password of at least 6 characters.';return}
+  b.disabled=true;err.textContent='';
+  try{
+    let r;
+    if(mode==='up')r=await sb.auth.signUp({email:em,password:pw,options:{data:{business_name:($('#a_biz').value||'').trim()}}});
+    else r=await sb.auth.signInWithPassword({email:em,password:pw});
+    if(r.error)throw r.error;
+    if(!r.data.session){err.className='text-sm text-emerald-500 mt-3';err.textContent='Check your email to confirm your account, then sign in.';b.disabled=false;return}
+    await enter(r.data.session.user);
+  }catch(e){err.textContent=e.message||'Something went wrong';b.disabled=false}
+}
+function showPaywall(){
+  $('#auth').innerHTML=shell(`<h2 class="text-2xl font-bold mb-1">Your free trial has ended</h2>
+  <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">Subscribe to keep recording and syncing. Your data is safe and will be here when you subscribe.</p>
+  <div class="rounded-2xl p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 mb-4"><div class="text-3xl font-black num text-emerald-500">${fmt(PRICE_NGN)}<span class="text-sm font-normal text-slate-500"> / month</span></div></div>
+  <button class="${btn} w-full bg-emerald-400 text-slate-950" onclick="pay()">Pay with Paystack</button>
+  <div id="aerr" class="text-sm text-slate-500 mt-3 min-h-[1.25rem]"></div>
+  <button class="w-full mt-2 text-sm text-sky-500" onclick="sb.auth.signOut()">Sign out</button>`);
+}
+function pay(){
+  if(!PAYSTACK_KEY)return toast('Payments are not configured yet','bg-rose-500 text-white');
+  PaystackPop.setup({key:PAYSTACK_KEY,email:user.email,amount:PRICE_NGN*100,currency:'NGN',ref:'irete_'+Date.now(),
+    metadata:{user_id:user.id},callback:function(){waitSub(0)},onClose:function(){}}).openIframe();
+}
+async function waitSub(n){
+  $('#aerr').textContent='Confirming payment…';
+  try{if((await checkAccess())&&premium){$('#auth').innerHTML='';closeM();render();await pushMissing();pushDay();startPoll();toast('Subscription active');return}}catch(e){}
+  if(n<12)setTimeout(()=>waitSub(n+1),3000);else $('#aerr').textContent='Still confirming. If you were charged, it will activate shortly: refresh in a minute.';
+}
+async function enter(u){
+  user=u;$('#auth').innerHTML='';$('#out').classList.remove('hidden');
+  load(K+':'+u.id);render();setCs('Syncing…');
+  try{
+    const ok=await checkAccess();
+    if(!ok){await sb.auth.signOut();setTimeout(()=>{const e=$('#aerr');if(e)e.textContent='This account is no longer active.'},150);return}
+    applyRole();await pull();persist();render();await pushMissing();
+    setCs('Synced');startPoll();
+  }catch(e){setCs('Offline')}
+}
+
+// ===== PREMIUM PAGE =====
+function openPremium(){
+  const p=plan,until=p.sub_until&&new Date(p.sub_until)>Date.now()?p.sub_until:null;
+  const status=until?['Premium active','until '+new Date(until).toLocaleDateString('en-NG'),'text-emerald-500']:
+    premium?['Free trial running',Math.ceil((new Date(p.trial_ends)-Date.now())/864e5)+' days left · all Premium features unlocked','text-amber-400']:
+    ['Free plan','Premium features are locked','text-slate-500 dark:text-slate-400'];
+  const use=(ic,t,d)=>`<div class="flex gap-3 py-3"><div class="w-9 h-9 shrink-0 rounded-xl bg-amber-400/15 text-amber-400 grid place-items-center"><i data-lucide="${ic}" class="w-4 h-4"></i></div><div><div class="font-semibold">${t}</div><div class="text-sm text-slate-500 dark:text-slate-400">${d}</div></div></div>`;
+  const row=(f,a,b)=>`<div class="grid grid-cols-[1fr_5rem_5rem] gap-2 py-2 text-sm border-b border-slate-200 dark:border-slate-800 items-center"><span>${f}</span><span class="text-center text-slate-500">${a}</span><span class="text-center font-semibold text-emerald-500">${b}</span></div>`;
+  modal(`<div class="flex items-center mb-3"><h3 class="text-xl font-bold flex items-center gap-2"><i data-lucide="crown" class="w-5 h-5 text-amber-400"></i>Premium</h3><button class="ml-auto text-sm text-sky-500" onclick="closeM()">Close</button></div>
+  <div class="rounded-2xl p-4 bg-slate-100 dark:bg-slate-800"><div class="font-bold ${status[2]}">${status[0]}</div><div class="text-sm text-slate-500 dark:text-slate-400">${status[1]}</div></div>
+  <div class="mt-4 font-bold">What Premium is used for</div>
+  <div class="divide-y divide-slate-200 dark:divide-slate-800">
+  ${use('users','Staff accounts (up to 5)','Each attendant gets their own login. Every shift, float and cash count is saved under their name, so a shortage points to a person, not a guess.')}
+  ${use('scale','Team report','See each attendant’s profit, shortages and overages for the last 30 days, and who is on shift right now.')}
+  ${use('history','Full history','Free keeps the last 7 days of past days. Premium keeps everything.')}
+  ${use('download','CSV export','Download shift records for your accountant or your own files.')}
+  ${use('message-circle','Daily owner summary (coming soon)','A WhatsApp or SMS summary when each day closes. Not available yet.')}
+  </div>
+  <div class="mt-3 font-bold">Free vs Premium</div>
+  <div class="grid grid-cols-[1fr_5rem_5rem] gap-2 text-xs text-slate-500 pt-2"><span></span><span class="text-center">Free</span><span class="text-center">Premium</span></div>
+  ${row('Record transactions &amp; daily tally','Yes','Yes')}${row('Cloud backup, any device','Yes','Yes')}${row('Past days history','7 days','All')}
+  ${row('Staff accounts','—','Up to 5')}${row('Team shortage report','—','Yes')}${row('CSV export','—','Yes')}
+  <div class="mt-4 text-center"><div class="text-3xl font-black num text-emerald-500">${fmt(PRICE_NGN)}<span class="text-sm font-normal text-slate-500"> / 30 days</span></div>
+  <div class="text-xs text-slate-500 mt-1">Each payment adds 30 days. Paid in naira via Paystack.</div></div>
+  <button class="${btn} w-full mt-3 bg-emerald-400 text-slate-950" onclick="pay()">${until?'Add 30 days':'Get Premium'}</button>
+  <div id="aerr" class="text-sm text-slate-500 mt-2 min-h-[1.25rem] text-center"></div>`);
+}
+
+// ===== TEAM =====
+async function openTeam(){
+  modal('<div class="text-sm text-slate-500">Loading team…</div>');
+  const [a,b]=await Promise.all([sb.from('staff').select('user_id,name,email,active').eq('owner_id',user.id),
+    sb.from('shifts').select('id,date,staff_id,data').gte('date',ymd(30)).order('id',{ascending:false})]);
+  const staff=a.data||[];teamRows=b.data||[];teamNames={[user.id]:'You (owner)'};staff.forEach(x=>teamNames[x.user_id]=x.name);
+  const by={};
+  teamRows.forEach(r=>{const x=by[r.staff_id]=by[r.staff_id]||{n:0,profit:0,short:0,over:0,live:null},d=r.data,st=stats(d),vc=d.closed&&d.closed.varCash;
+    x.n++;x.profit+=st.profit;if(vc<0)x.short+=vc;else if(vc>0)x.over+=vc;if(!d.closed&&d.open!==null&&d.date===ymd())x.live=st});
+  const sub='text-xs text-slate-500 dark:text-slate-400',act=staff.filter(x=>x.active),full=act.length>=(plan.staff_limit||5);
+  const head=`<div class="flex items-center mb-3"><h3 class="text-xl font-bold flex items-center gap-2"><i data-lucide="users" class="w-5 h-5"></i>Team</h3><button class="ml-auto text-sm text-sky-500" onclick="closeM()">Close</button></div>`;
+  if(!premium){$('#modal .pop').innerHTML=head+`<div class="rounded-2xl p-4 bg-amber-400/10 text-sm"><b>Staff accounts are a Premium feature.</b><div class="mt-1 text-slate-600 dark:text-slate-300">Give each attendant a login and see who is responsible for every shortage.</div></div><button class="${btn} w-full mt-3 bg-amber-400 text-slate-950" onclick="openPremium()">See what Premium includes</button>`;lucide.createIcons();return}
+  const card=(id)=>{const x=by[id]||{n:0,profit:0,short:0,over:0,live:null},s2=staff.find(y=>y.user_id===id);
+    return `<div class="rounded-xl p-3 bg-slate-100 dark:bg-slate-800 mb-2"><div class="flex items-center"><b>${(teamNames[id]||'').replace(/</g,'&lt;')}</b>${x.live?'<span class="ml-2 text-xs text-emerald-500">on shift</span>':''}${s2&&!s2.active?'<span class="ml-2 text-xs text-slate-500">removed</span>':''}
+      ${s2&&s2.active?`<button class="ml-auto text-xs text-rose-500" onclick="removeStaff('${id}',this)">remove</button>`:''}</div>
+      <div class="${sub}">${s2?s2.email:'Your own shifts'} · ${x.n} shifts (30 days)</div>
+      <div class="grid grid-cols-3 gap-2 mt-2 text-center text-sm"><div><div class="${sub}">Profit</div><b class="num text-emerald-500">${fmt(x.profit)}</b></div>
+      <div><div class="${sub}">Shortages</div><b class="num ${x.short<0?'text-rose-500':''}">${fmt(x.short)}</b></div><div><div class="${sub}">Overages</div><b class="num ${x.over>0?'text-emerald-500':''}">${fmt(x.over)}</b></div></div>
+      ${x.live?`<div class="${sub} mt-2">Live: ${x.live.n} txns · volume ${fmt(x.live.vol)} · drawer ${fmt(x.live.drawer)}</div>`:''}</div>`};
+  const inp2=`${inp} !text-base mb-2`;
+  $('#modal .pop').innerHTML=head+card(user.id)+staff.map(x=>card(x.user_id)).join('')+
+   `<button class="${btn} w-full mb-4 bg-slate-200 dark:bg-slate-700" onclick="exportCsv()">Download shifts (CSV)</button>
+   <div class="font-bold mb-2">Add an attendant ${full?'<span class="text-xs font-normal text-slate-500">(limit reached)</span>':`<span class="${sub}">${act.length}/${plan.staff_limit||5}</span>`}</div>
+   ${full?'':`<input id="t_n" class="${inp2}" placeholder="Name"><input id="t_e" type="email" class="${inp2}" placeholder="Their email (their login)"><input id="t_p" type="text" class="${inp2}" placeholder="Set a password (min 6 characters)">
+   <button class="${btn} w-full bg-emerald-400 text-slate-950" onclick="addStaff()">Create account</button><div class="${sub} mt-2">Share the email and password with them. They sign in on the same site and only see their own shifts.</div>`}`;
+  lucide.createIcons();
+}
+async function staffCall(body){
+  const {data,error}=await sb.functions.invoke('create-staff',{body});
+  if(error){let m='Request failed';try{m=(await error.context.json()).error||m}catch(e){}return {error:m}}
+  return data||{};
+}
+async function addStaff(){
+  const name=$('#t_n').value.trim(),email=$('#t_e').value.trim(),password=$('#t_p').value;
+  if(!name||!email||password.length<6)return toast('Enter name, email and a password of 6+ characters','bg-rose-500 text-white');
+  const r=await staffCall({action:'create',name,email,password});
+  if(r.error)return toast(r.error,'bg-rose-500 text-white');
+  toast(name+' added');openTeam();
+}
+async function removeStaff(id,b){
+  if(!b.dataset.s){b.dataset.s=1;b.textContent='tap again to remove';setTimeout(()=>{b.dataset.s='';b.textContent='remove'},3000);return}
+  const r=await staffCall({action:'remove',user_id:id});
+  if(r.error)return toast(r.error,'bg-rose-500 text-white');
+  toast('Attendant removed');openTeam();
+}
+function exportCsv(){
+  const q=x=>'"'+String(x??'').replace(/"/g,'""')+'"';
+  const lines=[['Date','Attendant','Started','Injected','Volume','Profit','Expected cash','Counted cash','Variance'].join(',')].concat(teamRows.map(r=>{
+    const d=r.data,st=stats(d),c=d.closed||{};
+    return [r.date,teamNames[r.staff_id]||'',d.open||0,st.inj,st.vol,st.profit,Math.round(st.expCash),c.counted??'',c.varCash??''].map(q).join(',')}));
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([lines.join('\n')],{type:'text/csv'}));
+  a.download='irete-shifts-'+ymd()+'.csv';a.click();
+}
+async function boot(){
+  if(!cloud){load(K);render();return}
+  const sim=$('#sim');if(sim)sim.closest('label').style.display='none';
+  sb=supabase.createClient(SB_URL,SB_KEY);
+  $('#out').onclick=()=>sb.auth.signOut();$('#prem').onclick=openPremium;$('#team').onclick=openTeam;
+  sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT'){user=null;okAccess=true;acc={};$('#app').innerHTML='';$('#out').classList.add('hidden');setCs('');showAuth()}});
+  const {data:{session}}=await sb.auth.getSession();
+  if(!session)return showAuth();
+  await enter(session.user);
+}
+boot();
+</script>
+</body>
+</html>
