@@ -1,0 +1,1120 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>POS Assistant · by Irete Labs</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#34d399">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="POS Assistant">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script>try{var t=localStorage.getItem('irete_theme');if(t==='light')document.documentElement.classList.remove('dark')}catch(e){}</script>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script>tailwind.config={darkMode:'class'}</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="https://js.paystack.co/v1/inline.js"></script>
+<script src="config.js"></script>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.num{font-variant-numeric:tabular-nums}
+.card{@apply rounded-2xl}
+@keyframes pop{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.pop{animation:pop .35s ease}
+input:focus{outline:2px solid #34d399}
+</style>
+</head>
+<body class="bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100 min-h-screen">
+<header class="sticky top-0 z-30 bg-white/90 dark:bg-slate-950/90 backdrop-blur border-b border-slate-200 dark:border-slate-800">
+  <div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
+    <div class="w-9 h-9 rounded-xl bg-emerald-400 text-slate-950 grid place-items-center font-black">P</div>
+    <div class="leading-tight"><div class="font-bold">POS Assistant</div><div class="text-xs text-slate-500 dark:text-slate-400">by Irete Labs</div></div>
+    <div class="ml-auto flex items-center gap-2">
+      <label class="flex items-center gap-2 text-xs cursor-pointer select-none">
+        <span class="hidden sm:inline text-slate-500 dark:text-slate-400">Auto-simulate terminal</span>
+        <span class="sm:hidden text-slate-500 dark:text-slate-400">Sim</span>
+        <input id="sim" type="checkbox" class="sr-only peer">
+        <span class="w-10 h-6 rounded-full bg-slate-300 dark:bg-slate-700 peer-checked:bg-emerald-400 relative transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-5 after:h-5 after:rounded-full after:bg-white after:transition peer-checked:after:translate-x-4"></span>
+      </label>
+      <span id="cs" class="hidden sm:inline text-xs text-slate-500 dark:text-slate-400"></span>
+      <button id="prem" class="p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 hidden text-amber-400" aria-label="Premium"><i data-lucide="crown" class="w-5 h-5"></i></button>
+      <button id="team" class="p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 hidden" aria-label="Team"><i data-lucide="users" class="w-5 h-5"></i></button>
+      <button id="help" class="p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800" aria-label="Help and guide" onclick="openGuide()"><i data-lucide="circle-help" class="w-5 h-5"></i></button>
+      <button id="theme" class="p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800" aria-label="Toggle theme"><i data-lucide="sun-moon" class="w-5 h-5"></i></button>
+      <button id="cfg" class="p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800" aria-label="Settings"><i data-lucide="settings" class="w-5 h-5"></i></button>
+      <button id="out" class="p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 hidden" aria-label="Sign out"><i data-lucide="log-out" class="w-5 h-5"></i></button>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-6xl mx-auto px-4 py-4 space-y-4" id="app"></main>
+<div id="modal"></div>
+<div id="auth"></div>
+<div id="toast" class="fixed left-1/2 -translate-x-1/2 bottom-6 z-50 pointer-events-none"></div>
+
+<script>
+const K='irete_pos_v1',$=s=>document.querySelector(s);
+const ymd=(off=0)=>new Date(Date.now()-off*864e5).toLocaleDateString('en-CA');
+const fmt=n=>(n<0?'-':'')+'₦'+Math.abs(Math.round(n)).toLocaleString('en-NG');
+const DEF={set:{mode:'',wMode:'manual',wVal:0,tMode:'manual',tVal:0,blk:10000,pct:0,cap:0,low:20000},day:null,hist:[]};
+// ===== CLOUD CONFIG: fill these in (leave SB_URL empty to run in local-only mode) =====
+const CFG=window.APP_CONFIG||{},SB_URL=CFG.SB_URL||'',SB_KEY=CFG.SB_KEY||'',PAYSTACK_KEY=CFG.PAYSTACK_KEY||'',PRICE_NGN=CFG.PRICE_NGN||3000;
+const BIZ_NGN=CFG.BUSINESS_NGN||20000,SETUP_NGN=CFG.SETUP_NGN??50000;
+const BANK=CFG.BANK||{bank:'',acct:'',holder:'',whatsapp:''};
+const BUILD='2026.11.10-b'; // shown in the footer so you can confirm which version is live
+const cloud=!!(SB_URL&&SB_KEY);
+let KEY=K,S,sb,user=null,okAccess=true,acc={},syncT=null,pollT=null;
+const clone=o=>JSON.parse(JSON.stringify(o));
+const newDay=()=>({id:Date.now(),date:ymd(),open:null,inj:[],tx:[],closed:null,del:[],idel:[]});
+function load(key){
+  KEY=key;try{S=JSON.parse(localStorage.getItem(KEY))||clone(DEF)}catch(e){S=clone(DEF)}
+  S.set=Object.assign({},DEF.set,S.set);S.hist=S.hist||[];
+  if(!S.day)S.day=newDay();
+  if(S.day.date!==ymd()){ // archive a stale unreconciled shift
+    if(!S.day.closed&&S.day.open!==null){S.day.closed={auto:true};S.hist.push(S.day)}
+    S.day=newDay();
+  }
+  persist();
+}
+const persist=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}};
+const save=()=>{persist();queueSync()};
+
+// ---- business maths ----
+// Withdrawal: customer swipes amount+fee, gets cash=amount. Processor cost = pct% capped.
+// Transfer: customer sends amount to our bank, gets cash = amount - fee.
+function calc(a,type){
+  const s=S.set,w=type==='w',m=w?s.wMode:s.tMode,x=w?s.wVal:s.tVal;
+  const fee=m==='fixed'?x:m==='pct'?a*x/100:m==='block'?Math.ceil(a/(s.blk||10000))*x:0;
+  return {fee:Math.round(fee),cost:w?Math.min(a*s.pct/100,s.cap||Infinity):0};
+}
+function mk(a,type,fee,cost,src,ref,t,cash){
+  const w=type==='w',co=w?a:(cash!=null?cash:a-fee),fe=w?fee:a-co,di=w?a+fee-cost:a;
+  return {id:Math.random().toString(36).slice(2),t:t||Date.now(),type,a,fee:fe,cost,cashOut:co,digIn:di,profit:fe-cost,src:src||'manual',ref:ref||''};
+}
+const sum=(arr,f)=>arr.reduce((x,y)=>x+f(y),0);
+function stats(d0){
+  const d={...d0,tx:d0.tx.filter(t=>!t.voided)};
+  const inj=sum(d.inj,i=>i.a),cashOut=sum(d.tx,t=>t.cashOut),digIn=sum(d.tx,t=>t.digIn);
+  return {inj,cashOut,digIn,vol:sum(d.tx,t=>'wtsc'.includes(t.type)?t.a:0),credit:sum(d.tx,t=>t.type==='d'||t.type==='c'?t.a:t.type==='r'?-t.a:0),qty:sum(d.tx,t=>t.type==='s'?(t.qty||0):0),m:{cash:sum(d.tx,t=>t.type==='s'&&t.method==='cash'?t.a:0),pos:sum(d.tx,t=>t.type==='s'&&t.method==='pos'?t.a:0),transfer:sum(d.tx,t=>t.type==='s'&&t.method==='transfer'?t.a:0)},profit:sum(d.tx,t=>t.profit),n:d.tx.length,
+    drawer:(d.open||0)+inj-cashOut, expCash:(d.open||0)+inj-cashOut};
+}
+
+// ---- UI helpers ----
+const inp='w-full rounded-xl px-4 py-3 text-lg num bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700';
+const btn='rounded-xl px-4 py-3 font-semibold transition active:scale-95';
+function modal(html){
+  $('#modal').innerHTML=`<div class="fixed inset-0 z-40 bg-black/60 grid items-end sm:place-items-center" onclick="if(event.target===this)closeM()">
+  <div class="pop w-full sm:max-w-md bg-white dark:bg-slate-900 rounded-t-3xl sm:rounded-3xl p-5 max-h-[92vh] overflow-y-auto" style="padding-bottom:max(1.25rem,env(safe-area-inset-bottom))">${html}</div></div>`;
+  lucide.createIcons();
+}
+const closeM=()=>$('#modal').innerHTML='';
+function toast(msg,cls='bg-emerald-400 text-slate-950'){
+  const e=document.createElement('div');e.className='pop px-4 py-2 mb-2 rounded-xl text-sm font-semibold shadow-lg '+cls;e.textContent=msg;
+  $('#toast').appendChild(e);setTimeout(()=>e.remove(),2600);
+}
+const v=id=>parseFloat($('#'+id).value)||0;
+
+// ---- actions ----
+function startDay(){
+  const o=v('f_open');if(o<0)return;
+  if(cloud&&S.day.open!==null){const dl=o-S.day.open;if(dl)S.day.inj.push({a:dl,t:Date.now(),note:'Opening float correction'})}else S.day.open=o;
+  save();closeM();render();toast('Opening float set: '+fmt(o));
+}
+function openStart(edit){modal(`<h3 class="text-xl font-bold mb-1">${edit?'Edit opening float':'Start the day'}</h3><p class="text-sm text-slate-500 dark:text-slate-400 mb-4">${isAgent()?'Cash you started the day with in the drawer.':'Cash in the till at the start of the day, for change. Leave it empty or enter 0 if you start with none.'}</p>
+  <input id="f_open" type="number" inputmode="numeric" class="${inp}" placeholder="${isAgent()?'Opening cash float (₦)':'Starting cash (₦), 0 if none'}" value="${edit?S.day.open:''}" autofocus>
+  <button class="${btn} w-full mt-4 bg-emerald-400 text-slate-950" onclick="startDay()">${edit?'Save':'Open session'}</button>`)}
+function openInject(){modal(`<h3 class="text-xl font-bold mb-1">Cash injection</h3><p class="text-sm text-slate-500 dark:text-slate-400 mb-4">Extra physical cash added to the till.</p>
+  <input id="f_inj" type="number" inputmode="numeric" class="${inp}" placeholder="Amount (₦)" autofocus>
+  <input id="f_note" class="${inp} mt-3 !text-base" placeholder="Note (optional, e.g. from owner)">
+  <button class="${btn} w-full mt-4 bg-sky-400 text-slate-950" onclick="doInject()">Add cash to drawer</button>`)}
+function doInject(){const a=v('f_inj');if(a<=0)return toast('Enter an amount','bg-rose-500 text-white');
+  S.day.inj.push({a,t:Date.now(),note:$('#f_note').value});save();closeM();render();toast(fmt(a)+' added to drawer','bg-sky-400 text-slate-950')}
+
+let feeTouched=false;
+function openTxn(type){
+  feeTouched=false;const w=type==='w';
+  modal(`<h3 class="text-xl font-bold mb-1">${w?'Cash withdrawal':'Transfer received'}</h3>
+  <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">${w?'Customer swipes card (amount + your charge), you give cash.':'Customer sends money to your account, you give cash.'}</p>
+  <label class="block text-xs mb-1 text-slate-500 dark:text-slate-400">${w?'Cash amount':'Amount received in account'} (₦)</label>
+  <input id="f_amt" type="number" inputmode="numeric" class="${inp}" oninput="prev('${type}','a')" autofocus>
+  <div class="grid grid-cols-4 gap-2 mt-2">${[5000,10000,20000,50000].map(x=>`<button class="text-xs py-2 rounded-lg bg-slate-200 dark:bg-slate-800" onclick="$('#f_amt').value=${x};prev('${type}','a')">${x/1000}k</button>`).join('')}</div>
+  <label class="block text-xs mt-4 mb-1 text-slate-500 dark:text-slate-400">Your charge (₦)</label>
+  <input id="f_fee" type="number" inputmode="numeric" class="${inp}" oninput="prev('${type}','f')">
+  ${w?'':`<label class="block text-xs mt-3 mb-1 text-slate-500 dark:text-slate-400">Cash given to customer (₦)</label>
+  <input id="f_cash" type="number" inputmode="numeric" class="${inp}" oninput="prev('t','c')">`}
+  <input id="f_ref" class="${inp} mt-3 !text-base" placeholder="Customer / bank ref (optional)">
+  <div id="prev" class="mt-4 rounded-xl p-3 bg-slate-100 dark:bg-slate-800 text-sm space-y-1"></div>
+  <button class="${btn} w-full mt-4 ${w?'bg-amber-400':'bg-emerald-400'} text-slate-950" onclick="doTxn('${type}')">Record transaction</button>`);
+  prev(type,'a');
+}
+function prev(type,src){
+  const a=v('f_amt'),w=type==='w';
+  if(src==='f'||src==='c')feeTouched=true;
+  if(src==='a'&&!feeTouched){const f=calc(a,type).fee;$('#f_fee').value=a>0&&f?f:''}
+  if(src==='c')$('#f_fee').value=a>0?a-v('f_cash'):'';
+  const fee=v('f_fee');
+  if(!w&&src!=='c')$('#f_cash').value=a>0?a-fee:'';
+  const t=mk(a,type,fee,w?calc(a,type).cost:0,0,0,0,w?null:v('f_cash'));
+  $('#prev').innerHTML=a>0?`<div class="flex justify-between"><span>Cash to give</span><b class="num">${fmt(t.cashOut)}</b></div>
+  <div class="flex justify-between"><span>${w?'Digital received (card + charge)':'Digital received'}</span><b class="num">${fmt(t.digIn)}</b></div>
+  ${t.cost?`<div class="flex justify-between"><span>Processor cost</span><b class="num">${fmt(t.cost)}</b></div>`:''}
+  <div class="flex justify-between ${t.profit<0?'text-rose-500':'text-emerald-500'}"><span>Your profit</span><b class="num">${fmt(t.profit)}</b></div>`:'<span class="text-slate-500">Enter an amount to preview.</span>';
+}
+function doTxn(type){
+  const a=v('f_amt'),w=type==='w';
+  if(a<=0)return toast('Enter an amount','bg-rose-500 text-white');
+  const t=mk(a,type,v('f_fee'),w?calc(a,type).cost:0,'manual',$('#f_ref').value,0,w?null:v('f_cash'));
+  if(t.cashOut<0)return toast('Cash given cannot be negative','bg-rose-500 text-white');
+  const short=t.cashOut>stats(S.day).drawer;
+  S.day.tx.unshift(t);save();closeM();render();
+  toast((w?'Withdrawal ':'Transfer ')+fmt(a)+' recorded · profit '+fmt(t.profit));
+  if(short)setTimeout(()=>toast('Drawer cash is now negative: check float/injections','bg-rose-500 text-white'),400);
+}
+function voidTx(id,b){
+  if(!b.dataset.s){b.dataset.s=1;b.textContent='tap again to void';setTimeout(()=>{b.dataset.s='';b.textContent='void'},3000);return}
+  (S.day.del=S.day.del||[]).push(id);S.day.tx=S.day.tx.filter(t=>t.id!==id);save();render();
+}
+function delInj(i,b){
+  if(!b.dataset.s){b.dataset.s=1;b.textContent='sure?';setTimeout(()=>{b.dataset.s='';b.textContent='remove'},3000);return}
+  if(cloud){const x=S.day.inj[i];S.day.inj.push({a:-x.a,t:Date.now(),note:'Correction of '+fmt(x.a)});save();render();return}
+  (S.day.idel=S.day.idel||[]).push(S.day.inj[i].t);S.day.inj.splice(i,1);save();render();
+}
+function eraseAll(b){
+  if(!b.dataset.s){b.dataset.s=1;b.textContent='Tap again to erase everything';return}
+  localStorage.removeItem(KEY);location.reload();
+}
+function openClose(){
+  const st=stats(S.day);
+  modal(`<h3 class="text-xl font-bold mb-1">Close day / shift balance</h3>
+  <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">Count the physical cash in your drawer.</p>
+  <label class="block text-xs mb-1 text-slate-500 dark:text-slate-400">Physical cash counted</label>
+  <input id="f_cnt" type="number" inputmode="numeric" class="${inp}" oninput="recon()" autofocus>
+  <label class="block text-xs mt-3 mb-1 text-slate-500 dark:text-slate-400">${isAgent()?'Bank received today (optional, from statement)':'POS + transfer total per terminal/bank report (optional)'}</label>
+  <input id="f_bank" type="number" inputmode="numeric" class="${inp}" oninput="recon()">
+  ${isStock()?`<label class="block text-xs mt-3 mb-1 text-slate-500 dark:text-slate-400">${isGas()?'Gas left in tank now (kg)':'Bags counted in the warehouse now'}</label><input id="f_tank" type="number" step="any" inputmode="decimal" class="${inp}" oninput="recon()">`:''}
+  <div class="mt-4 rounded-xl p-3 bg-slate-100 dark:bg-slate-800 text-sm space-y-1">
+    <div class="flex justify-between"><span>Expected cash</span><b class="num">${fmt(st.expCash)}</b></div>
+    <div class="flex justify-between"><span>Expected digital inflow</span><b class="num">${fmt(st.digIn)}</b></div>
+    <div class="flex justify-between"><span>Net profit today</span><b class="num text-emerald-500">${fmt(st.profit)}</b></div>
+  </div>
+  <div id="rc" class="mt-3"></div>
+  <button class="${btn} w-full mt-4 bg-rose-500 text-white" onclick="doClose()">Close &amp; lock day</button>`);
+}
+function rec(){
+  const st=stats(S.day),cnt=v('f_cnt'),bk=$('#f_bank').value;
+  const vc=cnt-st.expCash,vb=bk===''?null:parseFloat(bk)-st.digIn;
+  const sk=S.day.stock||{open:null,add:[]},ek=(sk.open||0)+sum(sk.add,x=>x.a)-st.qty,te=$('#f_tank'),tk=te&&te.value!==''?parseFloat(te.value):null;
+  const mt=isFuel()?meterTotals(S.day):null,got=st.m.cash+st.m.pos+st.m.transfer,vm=mt&&mt.rows.length?Math.round(got-mt.expected):null;
+  return {st,cnt,vc,vb,bk,tk,ek,mt,got,vm,vt:tk===null?null:Math.round((tk-ek)*100)/100};
+}
+function flag(label,x){
+  const c=x===0?'bg-emerald-500/15 text-emerald-500':x>0?'bg-emerald-500/15 text-emerald-500':'bg-rose-500/15 text-rose-500';
+  const w=x===0?'BALANCED':x>0?'OVERAGE +'+fmt(x):'SHORTAGE '+fmt(x);
+  return `<div class="rounded-xl p-3 ${c} flex justify-between items-center"><span class="text-sm">${label}</span><b class="text-base num">${w}</b></div>`;
+}
+function recon(){
+  if($('#f_cnt').value==='')return $('#rc').innerHTML='';
+  const r=rec();
+  $('#rc').innerHTML=`<div class="space-y-2">${flag('Cash',r.vc)}${r.vb===null?'':flag('Digital',r.vb)}${r.vt===null?'':flagKg(isGas()?'Gas in tank':'Warehouse stock',r.vt,unit())}${r.vm==null?'':flag('Pump meters vs money collected',r.vm)}</div>`;
+}
+function doClose(){
+  if($('#f_cnt').value==='')return toast('Enter counted cash','bg-rose-500 text-white');
+  const r=rec();
+  S.day.closed={at:Date.now(),counted:r.cnt,varCash:r.vc,bankSeen:r.bk===''?null:parseFloat(r.bk),varBank:r.vb,tank:r.vt===null?null:{counted:r.tk,expected:r.ek,var:r.vt},meter:r.vm==null?null:{expected:r.mt.expected,received:r.got,var:r.vm},expCash:r.st.expCash,expBank:r.st.digIn};
+  S.hist.push(S.day);save();closeM();$('#sim').checked=false;stopSim();render();
+}
+function newShift(){S.day=newDay();save();render()}
+
+function openCfg(){
+  const s=S.set,sel=(id,m)=>`<select id="${id}" class="${inp} !text-base">${[['manual','I enter it each time'],['fixed','Fixed ₦ per transaction'],['pct','% of amount'],['block','₦ per block of amount']].map(o=>`<option value="${o[0]}" ${o[0]===m?'selected':''}>${o[1]}</option>`).join('')}</select>`;
+  const f=(id,l,x)=>`<label class="block text-xs mt-3 mb-1 text-slate-500 dark:text-slate-400">${l}</label><input id="${id}" type="number" step="any" class="${inp}" value="${x}">`;
+  modal(`<h3 class="text-xl font-bold">Your charges</h3><p class="text-sm text-slate-500 dark:text-slate-400">You decide how fees work. The charge is always editable on each transaction.</p>
+  <button class="${btn} w-full mt-3 bg-emerald-400 text-slate-950 text-left flex items-center gap-2" onclick="openGuide()"><i data-lucide="book-open" class="w-5 h-5"></i>Step-by-step guide</button>
+  <button class="${btn} w-full mt-3 bg-slate-200 dark:bg-slate-800 text-left" onclick="openMode(false)">Business type: ${MODES[s.mode||'agent'].n} (change)</button>
+  <div class="font-semibold mt-4">Withdrawals (POS cash agents)</div>${sel('s_wm',s.wMode)}${f('s_wv','Value (₦ or %, ignored if “each time”)',s.wVal)}
+  <div class="font-semibold mt-4">Transfers</div>${sel('s_tm',s.tMode)}${f('s_tv','Value (₦ or %, ignored if “each time”)',s.tVal)}
+  ${f('s_b','Block size for “per block” (₦)',s.blk)}
+  <div class="font-semibold mt-4">Optional: your own cost</div>
+  ${f('s_p','Processor cost on withdrawals (% of amount, 0 if none)',s.pct)}${f('s_c','Cost cap per transaction (₦, 0 = no cap)',s.cap)}
+  ${f('s_l','Low-cash warning below (₦)',s.low)}
+  <button class="${btn} w-full mt-4 bg-emerald-400 text-slate-950" onclick="saveCfg()">Save</button>
+  <button class="${btn} w-full mt-2 bg-slate-200 dark:bg-slate-800" onclick="demo()" ${cloud?'hidden':''}>Load 6 days of demo history</button>
+  <button class="${btn} w-full mt-2 text-rose-500 border border-rose-500/40" onclick="eraseAll(this)" ${cloud?'hidden':''}>Erase all data</button>`);
+}
+function saveCfg(){S.set={mode:S.set.mode,menu:S.set.menu||[],wMode:$('#s_wm').value,wVal:v('s_wv'),tMode:$('#s_tm').value,tVal:v('s_tv'),blk:v('s_b')||10000,pct:v('s_p'),cap:v('s_c'),low:v('s_l')};save();closeM();render();pushSet();toast('Charges saved')}
+function demo(){
+  S.hist=S.hist.filter(d=>!d.demo);
+  for(let i=6;i>=1;i--){
+    const d=newDay();d.id=i;d.demo=1;d.date=ymd(i);d.open=50000;
+    const n=12+Math.floor(Math.random()*14);
+    for(let k=0;k<n;k++){const a=[2000,5000,10000,15000,20000,30000,50000][Math.floor(Math.random()*7)],ty=Math.random()<.6?'w':'t';d.tx.push(mk(a,ty,Math.ceil(a/10000)*100,0,'demo'));}
+    const st=stats(d);d.closed={at:Date.now(),counted:st.expCash,varCash:0,expCash:st.expCash,expBank:st.digIn};S.hist.push(d);
+  }
+  save();closeM();render();
+}
+
+// ---- simulator ----
+let simT=null;const BANKS=['GTBank','Access','Zenith','UBA','First Bank','Opay','Moniepoint','Kuda'];
+function stopSim(){clearInterval(simT);simT=null}
+function simTick(){
+  if(!isAgent())return;const d=S.day;if(d.open===null||d.closed)return;
+  const a=[2000,3000,5000,10000,15000,20000,30000,50000][Math.floor(Math.random()*8)];
+  let ty=Math.random()<.6?'w':'t';if(ty==='w'&&a>stats(d).drawer)ty='t';
+  const c=calc(a,ty),t=mk(a,ty,c.fee||Math.ceil(a/10000)*100,c.cost,'terminal',BANKS[Math.floor(Math.random()*BANKS.length)]);
+  if(t.cashOut>stats(d).drawer)return toast('Terminal skipped: drawer too low','bg-rose-500 text-white');
+  d.tx.unshift(t);save();render();toast('Terminal: '+(ty==='w'?'Withdrawal ':'Transfer ')+fmt(a));
+}
+$('#sim').onchange=e=>{
+  if(!e.target.checked)return stopSim();
+  if(S.day.open===null||S.day.closed){e.target.checked=false;return toast('Start a day first','bg-rose-500 text-white')}
+  simT=setInterval(simTick,3500);simTick();
+};
+$('#cfg').onclick=openCfg;
+$('#theme').onclick=()=>{const d=document.documentElement.classList.toggle('dark');try{localStorage.setItem('irete_theme',d?'dark':'light')}catch(e){}render()};
+
+// ---- render ----
+let charts={};
+function render(){
+  const d=S.day,st=stats(d),low=isAgent()&&st.drawer<S.set.low,open=d.open!==null,closed=!!d.closed;
+  const card='rounded-2xl p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800';
+  const sub='text-xs text-slate-500 dark:text-slate-400';
+  const sum4=[[isAgent()?'Total volume':'Total sales',fmt(st.vol),'text-sky-500','trending-up'],costless()?['POS + transfer',fmt(st.m.pos+st.m.transfer),'text-sky-500','landmark']:[isAgent()?'Commissions earned':'Gross profit',fmt(st.profit),'text-emerald-500','coins'],['Transactions',st.n,'text-violet-400','receipt'],
+    isAgent()?['Cash liquidity',low&&open?'LOW':'Healthy',low&&open?'text-rose-500':'text-emerald-500','droplet']:['Cash sales',fmt(st.m.cash),'text-amber-400','banknote']];
+  $('#app').innerHTML=`
+  ${cfgBanner()}
+  ${installCard()}
+  <section class="${card} flex flex-wrap items-center gap-3">
+    <div><div class="${sub}">${new Date().toLocaleDateString('en-NG',{weekday:'long',day:'numeric',month:'long'})}${acc.txt?' · '+acc.txt:''}</div>
+      <div id="cs2" class="${sub} ${/^(Offline|Setup)/.test(syncMsg)?'!text-rose-500 font-semibold':''}">${syncMsg}</div>
+      <div class="font-bold text-lg">${!open?'No active session':closed?'Day closed':'Session open'}
+      ${open?`<span class="text-sm font-normal ${sub}">· float ${fmt(d.open)}</span>`:''}</div></div>
+    <div class="ml-auto flex gap-2 flex-wrap">
+      ${!open?`<button class="${btn} bg-emerald-400 text-slate-950" onclick="openStart()">Start day</button>`:
+        closed?`<button class="${btn} bg-emerald-400 text-slate-950" onclick="newShift()">Start new shift</button>`:
+        `<button class="${btn} bg-sky-400/15 text-sky-500" onclick="openInject()">+ Inject cash</button><button class="${btn} bg-rose-500 text-white" onclick="openClose()">Close day</button>`}
+    </div></section>
+
+  <section class="${card}">
+    <div class="font-bold mb-3 flex items-center gap-2"><i data-lucide="calculator" class="w-4 h-4"></i>Today’s tally <span class="text-xs font-normal ${sub}">(calculated automatically)</span></div>
+    <div class="grid grid-cols-3 gap-2 text-center">
+      <div class="rounded-xl p-3 bg-slate-100 dark:bg-slate-800"><div class="${sub}">Started with</div><div class="text-lg sm:text-2xl font-black num text-amber-400">${open?fmt(d.open):'—'}</div>${open&&!closed&&plan.role!=='staff'?`<button class="text-xs text-sky-500" onclick="openStart(1)">edit</button>`:''}</div>
+      <div class="rounded-xl p-3 bg-slate-100 dark:bg-slate-800"><div class="${sub}">Injected</div><div class="text-lg sm:text-2xl font-black num text-sky-400">${fmt(st.inj)}</div><div class="${sub}">${d.inj.length} time${d.inj.length===1?'':'s'}</div></div>
+      <div class="rounded-xl p-3 bg-slate-100 dark:bg-slate-800"><div class="${sub}">${isAgent()?'Total profit':'Gross profit'}</div><div class="text-lg sm:text-2xl font-black num text-emerald-500">${fmt(st.profit)}</div><div class="${sub}">${st.n} txns</div></div>
+    </div>
+    <div class="mt-3 text-sm space-y-1">
+      <div class="flex justify-between"><span>Cash in drawer now</span><b class="num">${fmt(st.drawer)}</b></div>
+      <div class="flex justify-between"><span>Bank / digital received</span><b class="num">${fmt(st.digIn)}</b></div>
+      ${st.credit?`<div class="flex justify-between"><span>Credit given, not yet repaid</span><b class="num text-rose-400">${fmt(st.credit)}</b></div>`:''}
+      <div class="flex justify-between border-t border-slate-200 dark:border-slate-800 pt-1"><span>${isAgent()?'Total money (started + injected + profit'+(st.credit?' − credit':'')+')':'Total received (cash + POS + transfer)'}</span><b class="num">${fmt(isAgent()?(d.open||0)+st.inj+st.profit-st.credit:st.m.cash+st.m.pos+st.m.transfer)}</b></div>
+    </div>
+    ${d.inj.length?`<div class="mt-3 text-xs ${sub}">Injections:</div>${d.inj.map((x,i)=>`<div class="flex justify-between text-sm py-1"><span>${new Date(x.t).toLocaleTimeString('en-NG',{hour:'2-digit',minute:'2-digit'})}${x.note?' · '+x.note.replace(/</g,'&lt;'):''}</span><span><b class="num">${fmt(x.a)}</b>${closed||plan.role==='staff'?'':` <button class="text-xs text-rose-500 ml-2" onclick="delInj(${i},this)">remove</button>`}</span></div>`).join('')}`:''}
+  </section>
+
+  ${gasCard(d,st)}
+  ${meterCard(d)}
+  ${itemsCard(d)}
+  ${premiumCard()}
+  <section class="grid grid-cols-2 lg:grid-cols-4 gap-3">${sum4.map(c=>`<div class="${card}"><div class="flex justify-between ${sub}">${c[0]}<i data-lucide="${c[3]}" class="w-4 h-4"></i></div><div class="text-xl sm:text-2xl font-extrabold num mt-1 ${c[2]}">${c[1]}</div></div>`).join('')}</section>
+
+  <section class="grid sm:grid-cols-2 gap-3">
+    <div class="${card} ${low&&open?'!border-rose-500':''}"><div class="${sub} flex items-center gap-2"><i data-lucide="banknote" class="w-4 h-4"></i>Cash in drawer</div>
+      <div class="text-3xl font-black num text-amber-400 mt-1">${fmt(st.drawer)}</div>
+      <div class="${sub} mt-1">Float ${fmt(d.open||0)} + injections ${fmt(st.inj)} ${st.cashOut<0?'+ cash received '+fmt(-st.cashOut):'− paid out '+fmt(st.cashOut)}</div>
+      ${low&&open?`<div class="mt-2 text-sm font-bold text-rose-500">Low cash: inject more before the next withdrawal</div>`:''}</div>
+    <div class="${card}"><div class="${sub} flex items-center gap-2"><i data-lucide="landmark" class="w-4 h-4"></i>${isAgent()?'Digital inflow (bank)':'POS + transfer received'}</div>
+      <div class="text-3xl font-black num text-sky-400 mt-1">${fmt(st.digIn)}</div>
+      <div class="${sub} mt-1">Card settlements + transfers received today</div></div>
+  </section>
+
+  ${isAgent()?`<section class="grid grid-cols-2 gap-3">
+    <button ${!open||closed?'disabled':''} class="${btn} !py-5 text-left bg-amber-400 text-slate-950 disabled:opacity-40" onclick="openTxn('w')"><i data-lucide="credit-card" class="w-6 h-6 mb-1"></i><div>Cash withdrawal</div><div class="text-xs font-normal opacity-70">Card in, cash out</div></button>
+    <button ${!open||closed?'disabled':''} class="${btn} !py-5 text-left bg-emerald-400 text-slate-950 disabled:opacity-40" onclick="openTxn('t')"><i data-lucide="arrow-left-right" class="w-6 h-6 mb-1"></i><div>Transfer / deposit</div><div class="text-xs font-normal opacity-70">Money in, cash out</div></button>
+  </section>`:saleActions(open,closed)}
+
+  ${toolsRow()}
+
+  ${closed&&d.closed.counted!==undefined?`<section class="${card}"><div class="font-bold mb-2">Day reconciliation</div><div class="space-y-2">${flag('Cash (counted '+fmt(d.closed.counted)+' vs expected '+fmt(d.closed.expCash)+')',d.closed.varCash)}${d.closed.varBank!=null?flag('Digital',d.closed.varBank):''}${d.closed.tank?flagKg(isGas()?'Gas in tank':'Warehouse stock',d.closed.tank.var,unit()):''}${d.closed.meter?flag('Pump meters vs money',d.closed.meter.var):''}</div></section>`:''}
+
+  <section class="grid lg:grid-cols-3 gap-3">
+    <div class="${card}"><div class="font-bold text-sm mb-2">Daily turnover</div><div class="h-48"><canvas id="c1"></canvas></div></div>
+    <div class="${card}"><div class="font-bold text-sm mb-2">Cash vs digital volume</div><div class="h-48"><canvas id="c2"></canvas></div></div>
+    <div class="${card}"><div class="font-bold text-sm mb-2">Net profit trend</div><div class="h-48"><canvas id="c3"></canvas></div></div>
+  </section>
+
+  <section class="${card}"><div class="flex items-center mb-2"><div class="font-bold">Today’s ledger</div><span class="ml-auto ${sub}">${st.n} entries</span></div>
+    <div class="divide-y divide-slate-200 dark:divide-slate-800">
+    ${d.tx.length?d.tx.map(t=>`<div class="py-3 flex items-center gap-3 ${Date.now()-t.t<4000?'pop':''} ${t.voided?'opacity-50':''}">
+      <div class="w-9 h-9 rounded-xl grid place-items-center ${TY(t).c}"><i data-lucide="${TY(t).i}" class="w-4 h-4"></i></div>
+      <div class="min-w-0 flex-1"><div class="font-semibold num ${t.voided?'line-through':''}">${fmt(t.a)} <span class="text-xs font-normal ${sub}">${TY(t).l}${t.src==='terminal'?' · terminal':''}${t.ref?' · '+t.ref.replace(/</g,'&lt;'):''}</span></div>
+      <div class="${sub}">${new Date(t.t).toLocaleTimeString('en-NG',{hour:'2-digit',minute:'2-digit'})} ${('wt'.includes(t.type)?'· fee '+fmt(t.fee)+' · cost '+fmt(t.cost):(t.qty?'· qty '+t.qty:''))+(t.voided?' · VOIDED'+(t.voided.reason?': '+esc(t.voided.reason):''):'')}</div></div>
+      <div class="text-right"><div class="font-bold num ${t.voided?'text-slate-500 line-through':'text-emerald-500'}">+${fmt(t.profit)}</div>${t.voided?'<span class="text-xs text-slate-500">voided</span>':voidBtn(t)}</div></div>`).join(''):`<div class="py-6 text-center ${sub}">No transactions yet.</div>`}
+    </div></section>
+  <section class="${card}"><div class="font-bold mb-2">Past days</div>
+    ${S.hist.length?S.hist.filter(h=>!cloud||premium||h.date>=ymd(7)).slice(-14).reverse().map(h=>{const x=stats(h),c=h.closed||{},vc=c.varCash;
+      const tag=vc==null?'<span class="text-amber-400">unreconciled</span>':vc===0?'<span class="text-emerald-500">balanced</span>':vc>0?'<span class="text-emerald-500">over '+fmt(vc)+'</span>':'<span class="text-rose-500 font-bold">short '+fmt(vc)+'</span>';
+      return `<div class="py-2 border-b border-slate-200 dark:border-slate-800 last:border-0 text-sm"><div class="flex justify-between"><b>${h.date}</b>${tag}</div>
+      <div class="${sub}">Started ${fmt(h.open||0)} · injected ${fmt(x.inj)} · <span class="text-emerald-500 font-semibold">profit ${fmt(x.profit)}</span></div></div>`}).join(''):`<div class="${sub}">Closed days will appear here with their tally.</div>`}
+  </section>
+  <footer class="text-center text-xs ${sub} pb-6">POS Assistant by Irete Labs · ${cloud?'your data is backed up to your account':'data stays on this device'} · v${BUILD}</footer>`;
+  lucide.createIcons();drawCharts();
+}
+function drawCharts(){
+  const dark=document.documentElement.classList.contains('dark');
+  Chart.defaults.color=dark?'#94a3b8':'#475569';Chart.defaults.borderColor=dark?'#1e293b':'#e2e8f0';
+  const all=S.hist.concat(S.day.closed||S.day.open===null?[]:[S.day]),by={};
+  all.forEach(d=>{const s=stats(d),o=by[d.date]=by[d.date]||{vol:0,cash:0,dig:0,pr:0};o.vol+=s.vol;o.cash+=s.cashOut;o.dig+=s.digIn;o.pr+=s.profit});
+  const keys=Object.keys(by).sort().slice(-7),lab=keys.map(k=>k.slice(5));
+  const opt={responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{callback:x=>x>=1000?x/1000+'k':x}}}};
+  const cfgs={
+    c1:{type:'bar',data:{labels:lab,datasets:[{data:keys.map(k=>by[k].vol),backgroundColor:'#38bdf8',borderRadius:6}]},options:opt},
+    c2:{type:'bar',data:{labels:lab,datasets:[{label:'Cash out',data:keys.map(k=>by[k].cash),backgroundColor:'#fbbf24',borderRadius:4},{label:'Digital in',data:keys.map(k=>by[k].dig),backgroundColor:'#38bdf8',borderRadius:4}]},options:{...opt,plugins:{legend:{display:true,labels:{boxWidth:10}}}}},
+    c3:{type:'line',data:{labels:lab,datasets:[{data:keys.map(k=>by[k].pr),borderColor:'#34d399',backgroundColor:'rgba(52,211,153,.15)',fill:true,tension:.35,pointRadius:4}]},options:opt}
+  };
+  for(const id in cfgs){if(charts[id])charts[id].destroy();const el=$('#'+id);if(el)charts[id]=new Chart(el,cfgs[id])}
+}
+// ===== CLOUD: auth, sync, premium, staff =====
+let plan={},BIZ=null,premium=false,bizTier=false,teamRows=[],teamNames={};
+let syncMsg='';const setCs=t=>{syncMsg=t;['#cs','#cs2'].forEach(q=>{const e=$(q);if(e)e.textContent=t})};
+function mergeDay(a,b){
+  const del=[...new Set([...(a.del||[]),...(b.del||[])])],idel=[...new Set([...(a.idel||[]),...(b.idel||[])])];
+  const m=new Map();[...(b.tx||[]),...(a.tx||[])].forEach(t=>{const e=m.get(t.id);m.set(t.id,e&&e.voided&&!t.voided?e:t)});
+  const im=new Map();[...(b.inj||[]),...(a.inj||[])].forEach(x=>im.set(x.t,x));
+  return {...a,tx:[...m.values()].filter(t=>!del.includes(t.id)).sort((x,y)=>y.t-x.t),
+    inj:[...im.values()].filter(x=>!idel.includes(x.t)).sort((x,y)=>x.t-y.t),del,idel,
+    open:a.open!==null&&a.open!==undefined?a.open:(b.open??null),closed:a.closed||b.closed||null};
+}
+const upsertHist=x=>{const i=S.hist.findIndex(h=>h.id===x.id);i<0?S.hist.push(x):S.hist[i]=x};
+async function pull(){
+  const {data:rows,error}=await sb.from('shifts').select('id,data').eq('staff_id',user.id).gte('date',ymd(premium?45:7)).order('id');
+  if(error)throw error;
+  rows.forEach(r=>{let d=r.data;
+    if(d.id===S.day.id){Object.assign(S.day,mergeDay(S.day,d));d=S.day}
+    else if(!d.closed&&(S.day.open===null||(S.day.closed&&d.id>S.day.id)))S.day=d;
+    if(d.closed)upsertHist(d);
+  });
+  S.hist.sort((a,b)=>a.id-b.id);
+  try{const {data:vs}=await sb.from('tx_voids').select('shift_id,tx_id,status,reason').eq('staff_id',user.id);
+    const mp={};(vs||[]).forEach(x=>mp[x.shift_id+':'+x.tx_id]=x);
+    [S.day,...S.hist].forEach(d=>d.tx.forEach(t=>{const x=mp[d.id+':'+t.id];if(!x)return;if(x.status==='voided')t.voided={reason:x.reason,by:'owner'};else if(x.status==='rejected')t.reqVoid=false}))}catch(e){}
+}
+async function pushMissing(){
+  const m=new Map();[...S.hist,S.day].forEach(d=>{if(!d.demo&&(d.open!==null||d.tx.length))m.set(d.id,d)});
+  const rows=[...m.values()].map(d=>({user_id:BIZ,staff_id:user.id,id:d.id,date:d.date,data:d}));
+  if(rows.length)await sb.from('shifts').upsert(rows,{onConflict:'user_id,id'});
+  for(const d of m.values())await pushLedger(d);
+  persist();
+}
+function queueSync(){if(!cloud||!user||!okAccess)return;clearTimeout(syncT);setCs('Saving…');syncT=setTimeout(pushDay,600)}
+async function pushDay(){
+  const d=S.day;if(!cloud||!user||!okAccess||(d.open===null&&!d.tx.length))return;
+  try{
+    const {data:r}=await sb.from('shifts').select('data').eq('user_id',BIZ).eq('id',d.id).maybeSingle();
+    let changed=false;
+    if(r&&r.data){const before=JSON.stringify(d),m=mergeDay(d,r.data);Object.assign(d,m);changed=before!==JSON.stringify(d)}
+    const {error}=await sb.from('shifts').upsert({user_id:BIZ,staff_id:user.id,id:d.id,date:d.date,data:d},{onConflict:'user_id,id'});
+    if(error)throw error;
+    await pushLedger(d);persist();setCs('Synced');if(changed)render();
+  }catch(e){
+    if(e&&e.code==='42501'){setCs('Premium required to sync');return}
+    console.error(e);setCs('Offline: '+((e&&e.message)||'will retry').slice(0,80));clearTimeout(syncT);syncT=setTimeout(pushDay,8000);
+  }
+}
+const pushSet=()=>{if(cloud&&user&&plan.role==='owner')sb.from('profiles').update({settings:S.set}).eq('user_id',user.id).then(()=>{})};
+async function checkAccess(){
+  const {data:p,error}=await sb.rpc('my_plan');if(error)throw error;
+  plan=p;BIZ=p.biz;premium=!!p.premium;bizTier=!!p.business_access;
+  if(p.settings&&Object.keys(p.settings).length)S.set=Object.assign({},DEF.set,p.settings);
+  const until=p.sub_until&&new Date(p.sub_until)>Date.now()?p.sub_until:null;
+  acc={txt:(p.business?p.business+' · ':'')+(p.role==='staff'?'Attendant: '+p.name:until?(p.tier==='business'?'Business':'Premium')+' until '+new Date(until).toLocaleDateString('en-NG'):premium?'Trial: '+Math.ceil((new Date(p.trial_ends)-Date.now())/864e5)+' days left':'Free plan')};
+  return p.role!=='none';
+}
+function applyRole(){
+  const st=plan.role==='staff';
+  $('#prem').classList.toggle('hidden',st);$('#team').classList.toggle('hidden',st);$('#cfg').classList.toggle('hidden',st);
+}
+function startPoll(){
+  if(pollT)return;
+  const tick=async()=>{if(!user||!okAccess||$('#modal').innerHTML||document.hidden)return;
+    try{const b=JSON.stringify(S)+JSON.stringify(acc);await pull();await checkAccess();if(JSON.stringify(S)+JSON.stringify(acc)!==b){persist();render()}setCs('Synced')}catch(e){setCs('Offline')}};
+  pollT=setInterval(tick,20000);document.addEventListener('visibilitychange',tick);
+}
+const shell=h=>`<div class="fixed inset-0 z-50 bg-slate-100 dark:bg-slate-950 grid place-items-center p-4 overflow-y-auto"><div class="w-full max-w-sm py-6">
+  <div class="flex items-center gap-3 mb-6"><div class="w-11 h-11 rounded-xl bg-emerald-400 text-slate-950 grid place-items-center font-black text-xl">P</div><div><div class="font-bold text-lg">POS Assistant</div><div class="text-xs text-slate-500 dark:text-slate-400">by Irete Labs</div></div></div>${h}</div></div>`;
+function showAuth(mode='in'){
+  const up=mode==='up';
+  $('#auth').innerHTML=shell(`<h2 class="text-2xl font-bold mb-1">${up?'Create your account':'Welcome back'}</h2>
+  <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">${up?'Free to start. Try Premium free for 14 days, no card needed.':'Sign in to your account.'}</p>
+  ${up?`<input id="a_biz" class="${inp} mb-3 !text-base" placeholder="Business name">`:''}
+  <input id="a_em" type="email" autocomplete="email" class="${inp} mb-3 !text-base" placeholder="Email">
+  <input id="a_pw" type="password" autocomplete="${up?'new-password':'current-password'}" class="${inp} !text-base" placeholder="Password (min 6 characters)">
+  <div id="aerr" class="text-sm text-rose-500 mt-3 min-h-[1.25rem]"></div>
+  <button id="abtn" class="${btn} w-full mt-2 bg-emerald-400 text-slate-950" onclick="doAuth('${mode}')">${up?'Sign up':'Sign in'}</button>
+  <button class="w-full mt-4 text-sm text-sky-500" onclick="showAuth('${up?'in':'up'}')">${up?'Have an account? Sign in':'New here? Create an account'}</button>`);
+}
+async function doAuth(mode){
+  const em=$('#a_em').value.trim(),pw=$('#a_pw').value,err=$('#aerr'),b=$('#abtn');
+  if(!em||pw.length<6){err.textContent='Enter your email and a password of at least 6 characters.';return}
+  b.disabled=true;err.textContent='';
+  try{
+    let r;
+    if(mode==='up')r=await sb.auth.signUp({email:em,password:pw,options:{data:{business_name:($('#a_biz').value||'').trim()}}});
+    else r=await sb.auth.signInWithPassword({email:em,password:pw});
+    if(r.error)throw r.error;
+    if(!r.data.session){err.className='text-sm text-emerald-500 mt-3';err.textContent='Check your email to confirm your account, then sign in.';b.disabled=false;return}
+    await enter(r.data.session.user);
+  }catch(e){err.textContent=e.message||'Something went wrong';b.disabled=false}
+}
+function showPaywall(){
+  $('#auth').innerHTML=shell(`<h2 class="text-2xl font-bold mb-1">Your free trial has ended</h2>
+  <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">Subscribe to keep recording and syncing. Your data is safe and will be here when you subscribe.</p>
+  <div class="rounded-2xl p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 mb-4"><div class="text-3xl font-black num text-emerald-500">${fmt(PRICE_NGN)}<span class="text-sm font-normal text-slate-500"> / month</span></div></div>
+  <button class="${btn} w-full bg-emerald-400 text-slate-950" onclick="pay()">Pay with Paystack</button>
+  <div id="aerr" class="text-sm text-slate-500 mt-3 min-h-[1.25rem]"></div>
+  <button class="w-full mt-2 text-sm text-sky-500" onclick="sb.auth.signOut()">Sign out</button>`);
+}
+function pay(amount,plan,months){
+  if(!PAYSTACK_KEY)return toast('Online payment is not set up','bg-rose-500 text-white');
+  PaystackPop.setup({key:PAYSTACK_KEY,email:user.email,amount:Math.round(amount*100),currency:'NGN',ref:'pa_'+Date.now(),
+    metadata:{user_id:user.id,plan,months},callback:function(){waitSub(0)},onClose:function(){}}).openIframe();
+}
+async function waitSub(n){
+  $('#aerr').textContent='Confirming payment…';
+  try{if((await checkAccess())&&premium){$('#auth').innerHTML='';closeM();render();await pushMissing();pushDay();startPoll();toast('Subscription active');return}}catch(e){}
+  if(n<12)setTimeout(()=>waitSub(n+1),3000);else $('#aerr').textContent='Still confirming. If you were charged, it will activate shortly: refresh in a minute.';
+}
+async function enter(u){
+  user=u;$('#auth').innerHTML='';$('#out').classList.remove('hidden');
+  load(K+':'+u.id);render();setCs('Syncing…');
+  try{
+    const ok=await checkAccess();
+    if(!ok){await sb.auth.signOut();setTimeout(()=>{const e=$('#aerr');if(e)e.textContent='This account is no longer active.'},150);return}
+    applyRole();await pull();persist();render();maybeAskMode();maybeOnboard();await pushMissing();
+    setCs('Synced');startPoll();
+  }catch(e){console.error(e);applyRole();setCs('Setup error: '+((e&&e.message)||'see console'));toast('Setup problem: '+((e&&e.message)||e),'bg-rose-500 text-white')}
+}
+
+// ===== PREMIUM CARD (always visible on the dashboard) =====
+function premiumCard(){
+  if(!cloud||plan.role==='staff')return '';
+  const until=!!(plan.sub_until&&new Date(plan.sub_until)>Date.now()),
+    badge=until?['Active','bg-emerald-500/15 text-emerald-500']:premium?['Trial','bg-amber-400/15 text-amber-400']:['Free','bg-slate-500/15 text-slate-500'];
+  const days=plan.trial_ends?Math.max(0,Math.ceil((new Date(plan.trial_ends)-Date.now())/864e5)):0;
+  const line=until?'Active until '+new Date(plan.sub_until).toLocaleDateString('en-NG'):premium?days+' days of free trial left, all features unlocked':plan.trial_available?'You are on the Free plan. Try every Premium feature free for 14 days.':'Your free trial has ended. Upgrade to unlock Premium.';
+  const li=(ic,t)=>`<div class="flex items-center gap-2 text-sm"><i data-lucide="${ic}" class="w-4 h-4 text-emerald-500 shrink-0"></i>${t}</div>`;
+  return `<section class="rounded-2xl p-4 bg-gradient-to-br from-amber-400/10 to-emerald-400/10 border border-amber-400/30">
+   <div class="flex items-center gap-2"><i data-lucide="crown" class="w-5 h-5 text-amber-400"></i><b class="text-lg">Premium</b><span class="text-xs font-semibold px-2 py-0.5 rounded-full ${badge[1]}">${badge[0]}</span></div>
+   <div class="text-sm text-slate-500 dark:text-slate-400 mt-1">${line}</div>
+   <div class="grid sm:grid-cols-2 gap-2 mt-3">${li('users','Business plan: staff logins, void approval, pump-meter and cashier checks')}${li('scale','Team report: profit, shortages and overages per attendant')}${li('notebook-pen','Customer debt ledger with WhatsApp reminders')}${li('wallet','Expenses and real monthly net profit')}${li('history','Full history (Free keeps the last 7 days)')}${li('download','CSV export of every shift')}</div>
+   <div class="flex gap-2 mt-3">${plan.trial_available?`<button class="${btn} flex-1 bg-amber-400 text-slate-950" onclick="startTrial()">Start 14-day free trial</button><button class="${btn} bg-slate-200 dark:bg-slate-800" onclick="openPremium()">Compare</button>`:`<button class="${btn} flex-1 bg-amber-400 text-slate-950" onclick="openPremium()">${until?'Details / extend':'See Premium &amp; upgrade'}</button>`}<button class="${btn} bg-slate-200 dark:bg-slate-800" onclick="openTeam()">Team</button></div></section>`;
+}
+
+async function startTrial(){
+  const {error}=await sb.rpc('start_trial');
+  if(error)return toast('Could not start the trial: '+error.message,'bg-rose-500 text-white');
+  await checkAccess();closeM();render();toast('14-day Premium trial started: everything is unlocked');
+}
+
+// ===== PREMIUM PAGE =====
+const DISC={1:0,3:.1,12:.2};
+const PLANS=()=>({premium:{n:'Premium',price:PRICE_NGN,setup:0},business:{n:'Business',price:BIZ_NGN,setup:plan.ever_business?0:SETUP_NGN}});
+let payKey='premium',payMonths=1,payTotal=0;
+function openPremium(){
+  const until=plan.sub_until&&new Date(plan.sub_until)>Date.now()?plan.sub_until:null,tier=plan.tier||'free';
+  const status=until?[(tier==='business'?'Business':'Premium')+' active','until '+new Date(until).toLocaleDateString('en-NG'),'text-emerald-500']:
+    premium?['Free trial running',Math.ceil((new Date(plan.trial_ends)-Date.now())/864e5)+' days left · everything is unlocked','text-amber-400']:
+    ['Free plan','Record sales, 7 days of history, cloud backup','text-slate-500 dark:text-slate-400'];
+  const card=(k,t,bul)=>{const P=PLANS()[k];return `<div class="rounded-2xl p-4 border ${k==='business'?'border-amber-400/50 bg-amber-400/5':'border-slate-200 dark:border-slate-800'}"><div class="flex items-baseline"><b class="text-lg">${P.n}</b><span class="ml-auto text-2xl font-black num text-emerald-500">${fmt(P.price)}<span class="text-xs font-normal text-slate-500">/month</span></span></div>
+    <div class="text-xs text-slate-500 dark:text-slate-400">${t}</div>${P.setup?`<div class="text-xs mt-1">One-time setup &amp; staff training: <b class="num">${fmt(P.setup)}</b></div>`:''}
+    <ul class="text-sm mt-2 space-y-1">${bul.map(x=>`<li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-emerald-500 shrink-0 mt-0.5"></i>${x}</li>`).join('')}</ul>
+    <button class="${btn} w-full mt-3 ${k==='business'?'bg-amber-400':'bg-emerald-400'} text-slate-950" onclick="openPay('${k}')">Get ${P.n}</button></div>`};
+  modal(mHead('Plans','crown')+`<div class="rounded-2xl p-4 bg-slate-100 dark:bg-slate-800"><div class="font-bold ${status[2]}">${status[0]}</div><div class="text-sm text-slate-500 dark:text-slate-400">${status[1]}</div></div>
+  ${plan.trial_available?`<button class="${btn} w-full mt-2 bg-amber-400 text-slate-950" onclick="startTrial()">Start my 14-day free trial (everything unlocked)</button>`:''}
+  <div class="space-y-3 mt-4">${card('premium','For solo owners and small shops',['Customer debts with WhatsApp reminders','Expenses and real monthly net profit','Stock-loss tracking (gas, cement)','Full history'])}
+  ${card('business','For stations, bars, hotels, warehouses and stores with staff',['Everything in Premium','Staff logins for up to 15 attendants','Team report: shortages per attendant','Void approval with a full audit log, add-only records','Filling stations: pump-meter check','Stores: cashier totals checked against your own system','CSV export, setup and staff training'])}</div>
+  <div class="text-xs text-slate-500 mt-3">Pay for 1, 3 or 12 months at a time. Longer periods are cheaper.</div>`);
+}
+function openPay(k){payKey=k;payMonths=1;drawPay()}
+function drawPay(){
+  const P=PLANS()[payKey],base=Math.round(P.price*payMonths*(1-DISC[payMonths])),total=base+(P.setup||0),sub='text-xs text-slate-500 dark:text-slate-400';payTotal=total;
+  const msg=encodeURIComponent('Hello, I just paid '+fmt(total)+' for POS Assistant '+P.n+' ('+payMonths+' month'+(payMonths>1?'s':'')+'). My account email is '+(user?user.email:'')+'. Screenshot attached.');
+  const h=mHead(P.n,'crown')+`<div class="grid grid-cols-3 gap-2">${[1,3,12].map(m=>`<button class="${btn} !py-2 text-sm ${m===payMonths?'bg-emerald-400 text-slate-950':'bg-slate-200 dark:bg-slate-800'}" onclick="payMonths=${m};drawPay()">${m} mo${DISC[m]?`<div class="text-xs font-normal">save ${Math.round(DISC[m]*100)}%</div>`:''}</button>`).join('')}</div>
+  <div class="rounded-2xl p-4 bg-slate-100 dark:bg-slate-800 mt-3 text-sm space-y-1"><div class="flex justify-between"><span>${P.n} × ${payMonths} month${payMonths>1?'s':''}</span><b class="num">${fmt(base)}</b></div>
+  ${P.setup?`<div class="flex justify-between"><span>One-time setup &amp; staff training</span><b class="num">${fmt(P.setup)}</b></div>`:''}
+  <div class="flex justify-between border-t border-slate-300 dark:border-slate-700 pt-1"><b>Total</b><b class="num text-xl text-emerald-500">${fmt(total)}</b></div></div>
+  ${BANK.acct?`<div class="mt-3 rounded-2xl p-4 border border-slate-200 dark:border-slate-800 text-sm"><div class="font-bold mb-1">Pay by bank transfer</div><div>Send <b class="num">${fmt(total)}</b> to:</div><div class="mt-1"><b>${BANK.bank}</b></div><div class="text-xl font-black num tracking-wide">${BANK.acct}</div><div>${BANK.holder}</div>
+  <div class="${sub} mt-2">1) Send the screenshot on WhatsApp. 2) Tap “I’ve paid”. We switch it on once the transfer is confirmed.</div></div>
+  ${BANK.whatsapp?`<a href="https://wa.me/${BANK.whatsapp}?text=${msg}" target="_blank" rel="noopener" class="${btn} block w-full mt-2 text-center bg-[#25D366] text-slate-950">Send screenshot on WhatsApp</a>`:''}
+  <button class="${btn} w-full mt-2 bg-emerald-400 text-slate-950" onclick="openPaid()">I’ve paid</button>`:''}
+  ${PAYSTACK_KEY?`<button class="${btn} w-full mt-2 bg-sky-400 text-slate-950" onclick="pay(${total},'${payKey}',${payMonths})">Pay online</button>`:''}
+  <div id="aerr" class="text-sm text-slate-500 mt-2 min-h-[1.25rem] text-center"></div>`;
+  if($('#modal .pop'))setPop(h);else modal(h);
+}
+function openPaid(){modal(`<h3 class="text-xl font-bold mb-1">Confirm your transfer</h3><p class="text-sm text-slate-500 dark:text-slate-400 mb-4">Tell us who sent the money so we can match it.</p>
+  <input id="f_pn" class="${inp} !text-base" placeholder="Sender name or transfer reference" autofocus>
+  <button class="${btn} w-full mt-4 bg-emerald-400 text-slate-950" onclick="sendPaid()">Send</button>`)}
+async function sendPaid(){
+  const note=$('#f_pn').value.trim();if(!note)return toast('Enter the sender name or reference','bg-rose-500 text-white');
+  const {error}=await sb.from('payment_requests').insert({user_id:user.id,email:user.email,business:plan.business||'',amount:payTotal,plan:payKey,months:payMonths,note});
+  if(error)return toast('Could not send: try again','bg-rose-500 text-white');
+  closeM();toast('Sent. We’ll confirm and switch it on shortly.');
+}
+
+// ===== TEAM =====
+async function openTeam(){
+  modal('<div class="text-sm text-slate-500">Loading team…</div>');
+  const [a,b,c]=await Promise.all([sb.from('staff').select('user_id,name,email,active').eq('owner_id',user.id),
+    ledgerAll(ymd(30)).then(d=>({data:d})).catch(e=>({data:[],error:e})),
+    sb.from('tx_voids').select('*').gte('created_at',new Date(Date.now()-30*864e5).toISOString()).order('created_at',{ascending:false})]);
+  const staff=a.data||[];teamRows=buildShifts(b.data||[]);teamNames={[user.id]:'You (owner)'};staff.forEach(x=>teamNames[x.user_id]=x.name);
+  voidRows=c.data||[];teamRows.forEach(r=>r.data.tx.forEach(t=>{if(voidRows.some(v=>v.shift_id===r.id&&v.tx_id===t.id&&v.status==='voided'))t.voided=t.voided||{reason:'',by:'owner'}}));
+  const by={};
+  teamRows.forEach(r=>{const x=by[r.staff_id]=by[r.staff_id]||{n:0,profit:0,short:0,over:0,live:null},d=r.data,st=stats(d),vc=d.closed&&(d.closed.counted!=null?Math.round(d.closed.counted-st.expCash):d.closed.varCash);
+    x.n++;x.profit+=st.profit;if(vc<0)x.short+=vc;else if(vc>0)x.over+=vc;const mv=d.closed&&d.closed.meter?d.closed.meter.var:0;if(mv<0)x.short+=mv;else if(mv>0)x.over+=mv;if(!d.closed&&d.open!==null&&d.date===ymd())x.live=st});
+  const sub='text-xs text-slate-500 dark:text-slate-400',act=staff.filter(x=>x.active),full=act.length>=(plan.staff_limit||15);
+  const head=`<div class="flex items-center mb-3"><h3 class="text-xl font-bold flex items-center gap-2"><i data-lucide="users" class="w-5 h-5"></i>Team</h3><button class="ml-auto text-sm text-sky-500" onclick="closeM()">Close</button></div>`;
+  if(!bizTier){$('#modal .pop').innerHTML=head+`<div class="rounded-2xl p-4 bg-amber-400/10 text-sm"><b>Staff accounts are part of the Business plan.</b><div class="mt-1 text-slate-600 dark:text-slate-300">Give each attendant a login and see who is responsible for every shortage.</div></div><button class="${btn} w-full mt-3 bg-amber-400 text-slate-950" onclick="openPremium()">See plans</button>`;lucide.createIcons();return}
+  const card=(id)=>{const x=by[id]||{n:0,profit:0,short:0,over:0,live:null},s2=staff.find(y=>y.user_id===id);
+    return `<div class="rounded-xl p-3 bg-slate-100 dark:bg-slate-800 mb-2"><div class="flex items-center"><b>${(teamNames[id]||'').replace(/</g,'&lt;')}</b>${x.live?'<span class="ml-2 text-xs text-emerald-500">on shift</span>':''}${s2&&!s2.active?'<span class="ml-2 text-xs text-slate-500">removed</span>':''}
+      ${s2&&s2.active?`<button class="ml-auto text-xs text-rose-500" onclick="removeStaff('${id}',this)">remove</button>`:''}</div>
+      <div class="${sub}">${s2?s2.email:'Your own shifts'} · ${x.n} shifts (30 days)</div>
+      <div class="grid grid-cols-3 gap-2 mt-2 text-center text-sm"><div><div class="${sub}">Profit</div><b class="num text-emerald-500">${fmt(x.profit)}</b></div>
+      <div><div class="${sub}">Shortages</div><b class="num ${x.short<0?'text-rose-500':''}">${fmt(x.short)}</b></div><div><div class="${sub}">Overages</div><b class="num ${x.over>0?'text-emerald-500':''}">${fmt(x.over)}</b></div></div>
+      <button class="text-xs text-sky-500 mt-2" onclick="openStaffTx('${id}')">View transactions &amp; voids</button>
+      ${x.live?`<div class="${sub} mt-2">Live: ${x.live.n} txns · volume ${fmt(x.live.vol)} · drawer ${fmt(x.live.drawer)}</div>`:''}</div>`};
+  const inp2=`${inp} !text-base mb-2`;
+  $('#modal .pop').innerHTML=head+card(user.id)+staff.map(x=>card(x.user_id)).join('')+
+   `<button class="${btn} w-full mb-2 bg-amber-400/15 text-amber-500" onclick="openVoids()">Void requests &amp; log${voidRows.filter(x=>x.status==='requested').length?' ('+voidRows.filter(x=>x.status==='requested').length+' waiting)':''}</button>
+   <button class="${btn} w-full mb-4 bg-slate-200 dark:bg-slate-700" onclick="exportCsv()">Download shifts (CSV)</button>
+   <div class="font-bold mb-2">Add an attendant ${full?'<span class="text-xs font-normal text-slate-500">(limit reached)</span>':`<span class="${sub}">${act.length}/${plan.staff_limit||15}</span>`}</div>
+   ${full?'':`<input id="t_n" class="${inp2}" placeholder="Name"><input id="t_e" type="email" class="${inp2}" placeholder="Their email (their login)"><input id="t_p" type="text" class="${inp2}" placeholder="Set a password (min 6 characters)">
+   <button class="${btn} w-full bg-emerald-400 text-slate-950" onclick="addStaff()">Create account</button><div class="${sub} mt-2">Share the email and password with them. They sign in on the same site and only see their own shifts.</div>`}`;
+  lucide.createIcons();
+}
+async function staffCall(body){
+  const {data,error}=await sb.functions.invoke('create-staff',{body});
+  if(error){let m='Request failed';try{m=(await error.context.json()).error||m}catch(e){}return {error:m}}
+  return data||{};
+}
+async function addStaff(){
+  const name=$('#t_n').value.trim(),email=$('#t_e').value.trim(),password=$('#t_p').value;
+  if(!name||!email||password.length<6)return toast('Enter name, email and a password of 6+ characters','bg-rose-500 text-white');
+  const r=await staffCall({action:'create',name,email,password});
+  if(r.error)return toast(r.error,'bg-rose-500 text-white');
+  toast(name+' added');openTeam();
+}
+async function removeStaff(id,b){
+  if(!b.dataset.s){b.dataset.s=1;b.textContent='tap again to remove';setTimeout(()=>{b.dataset.s='';b.textContent='remove'},3000);return}
+  const r=await staffCall({action:'remove',user_id:id});
+  if(r.error)return toast(r.error,'bg-rose-500 text-white');
+  toast('Attendant removed');openTeam();
+}
+function exportCsv(){
+  const q=x=>'"'+String(x??'').replace(/"/g,'""')+'"';
+  const lines=[['Date','Attendant','Started','Injected','Volume','Profit','Expected cash','Counted cash','Variance'].join(',')].concat(teamRows.map(r=>{
+    const d=r.data,st=stats(d),c=d.closed||{};
+    return [r.date,teamNames[r.staff_id]||'',d.open||0,st.inj,st.vol,st.profit,Math.round(st.expCash),c.counted??'',c.counted!=null?Math.round(c.counted-st.expCash):''].map(q).join(',')}));
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([lines.join('\n')],{type:'text/csv'}));
+  a.download='pos-assistant-shifts-'+ymd()+'.csv';a.click();
+}
+
+// ===== SHARED HELPERS =====
+const TY=t=>({w:{l:'Withdrawal',i:'credit-card',c:'bg-amber-400/15 text-amber-400'},t:{l:'Transfer',i:'arrow-left-right',c:'bg-emerald-400/15 text-emerald-400'},
+  d:{l:'Credit given',i:'notebook-pen',c:'bg-rose-500/15 text-rose-400'},s:{l:'Sale',i:'shopping-bag',c:'bg-emerald-400/15 text-emerald-400'},c:{l:'Credit sale',i:'notebook-pen',c:'bg-rose-500/15 text-rose-400'},o:{l:'Cash paid out',i:'arrow-up-right',c:'bg-rose-500/15 text-rose-400'},r:{l:'Debt repaid',i:'badge-check',c:'bg-sky-400/15 text-sky-400'}})[t.type]||{l:'Entry',i:'receipt',c:''};
+const mHead=(t,ic)=>`<div class="flex items-center mb-3"><h3 class="text-xl font-bold flex items-center gap-2"><i data-lucide="${ic}" class="w-5 h-5"></i>${t}</h3><button class="ml-auto text-sm text-sky-500" onclick="closeM()">Close</button></div>`;
+const lockBox=t=>`<div class="rounded-2xl p-4 bg-amber-400/10 text-sm"><b>${t} is a Premium feature.</b><div class="mt-1 text-slate-600 dark:text-slate-300">Start your free trial or upgrade to use it.</div></div><button class="${btn} w-full mt-3 bg-amber-400 text-slate-950" onclick="openPremium()">See what Premium includes</button>`;
+const setPop=h=>{$('#modal .pop').innerHTML=h;lucide.createIcons()};
+function toolsRow(){
+  if(!cloud)return '';
+  const lk=premium?'':'<i data-lucide="lock" class="w-3 h-3 inline ml-1 text-amber-400"></i>',own=plan.role!=='staff';
+  const b='class="'+btn+' text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800"';
+  return `<section class="grid ${own?'grid-cols-2':'grid-cols-1'} gap-3"><button ${b} onclick="openDebts()"><i data-lucide="notebook-pen" class="w-5 h-5 mb-1 text-rose-400"></i><div>Customer debts${lk}</div></button>
+  ${own?`<button ${b} onclick="openExpenses()"><i data-lucide="wallet" class="w-5 h-5 mb-1 text-sky-400"></i><div>Expenses &amp; net profit${lk}</div></button>`:''}</section>`;
+}
+function ledger(type,a,method,ref){ // post credit given / debt repaid into today's shift so the drawer count still balances
+  S.day.tx.unshift({id:Math.random().toString(36).slice(2),t:Date.now(),type,a,fee:0,cost:0,profit:0,src:'debt',ref,
+    cashOut:type==='d'?a:(method==='cash'?-a:0),digIn:type==='r'&&method==='transfer'?a:0});
+  save();render();
+}
+const shiftOpen=()=>S.day.open!==null&&!S.day.closed;
+
+// ===== CUSTOMER DEBTS (Premium) =====
+let debtRows=[];
+const waLink=(p,t)=>{p=(p||'').replace(/\D/g,'');if(p.startsWith('0'))p='234'+p.slice(1);return p?'https://wa.me/'+p+'?text='+encodeURIComponent(t):''};
+async function openDebts(){
+  modal('<div class="text-sm text-slate-500">Loading…</div>');
+  if(!premium)return setPop(mHead('Customer debts','notebook-pen')+lockBox('Customer debts'));
+  const {data,error}=await sb.from('debts').select('*').order('created_at',{ascending:false});
+  if(error){setPop(mHead('Customer debts','notebook-pen')+'<div class="text-sm text-rose-500">Could not load: '+error.message+'</div>');return}
+  debtRows=data||[];
+  const open=debtRows.filter(x=>x.amount-x.paid>0),owed=sum(open,x=>x.amount-x.paid),sub='text-xs text-slate-500 dark:text-slate-400',inp2=`${inp} !text-base mb-2`;
+  setPop(mHead('Customer debts','notebook-pen')+`<div class="rounded-2xl p-4 bg-slate-100 dark:bg-slate-800 mb-3"><div class="${sub}">Customers owe you</div><div class="text-3xl font-black num text-rose-400">${fmt(owed)}</div><div class="${sub}">${open.length} open</div></div>
+  ${open.length?open.map(x=>{const rem=x.amount-x.paid,days=Math.floor((Date.now()-new Date(x.created_at))/864e5),
+    link=waLink(x.phone,'Hello '+x.name+', a friendly reminder that you owe '+fmt(rem)+(plan.business?' at '+plan.business:'')+'. Thank you.');
+    return `<div class="rounded-xl p-3 border border-slate-200 dark:border-slate-800 mb-2"><div class="flex items-center"><b>${x.name.replace(/</g,'&lt;')}</b><b class="ml-auto num text-rose-400">${fmt(rem)}</b></div>
+    <div class="${sub}">${days===0?'today':days+' day'+(days===1?'':'s')+' ago'}${x.paid>0?' · paid '+fmt(x.paid)+' of '+fmt(x.amount):''}${x.note?' · '+x.note.replace(/</g,'&lt;'):''}</div>
+    <div class="flex gap-2 mt-2"><button class="${btn} !py-2 text-sm flex-1 bg-emerald-400 text-slate-950" onclick="payDebt(${x.id})">Record payment</button>
+    ${link?`<a href="${link}" target="_blank" rel="noopener" class="${btn} !py-2 text-sm bg-slate-200 dark:bg-slate-800 text-center">Remind</a>`:''}</div></div>`}).join(''):`<div class="${sub} mb-3">No open debts.</div>`}
+  <div class="font-bold mt-4 mb-2">Add a debt</div>
+  <input id="d_n" class="${inp2}" placeholder="Customer name"><input id="d_p" type="tel" class="${inp2}" placeholder="Phone (for WhatsApp reminder)">
+  <input id="d_a" type="number" inputmode="numeric" class="${inp2}" placeholder="Amount owed (₦)"><input id="d_o" class="${inp2}" placeholder="Note (optional)">
+  ${shiftOpen()?`<label class="flex items-center gap-2 text-sm mb-3"><input id="d_c" type="checkbox" checked class="w-4 h-4"> ${isAgent()?'Cash was taken from my drawer (adds to today’s ledger)':'This was a credit sale (adds to today’s sales)'}</label>`:`<div class="${sub} mb-3">No open shift, so this won’t change today’s drawer count.</div>`}
+  <button class="${btn} w-full bg-emerald-400 text-slate-950" onclick="addDebt()">Save debt</button>`);
+}
+async function addDebt(){
+  const name=$('#d_n').value.trim(),a=v('d_a');
+  if(!name||a<=0)return toast('Enter a name and amount','bg-rose-500 text-white');
+  const {error}=await sb.from('debts').insert({user_id:BIZ,name,phone:$('#d_p').value.trim(),amount:a,note:$('#d_o').value.trim()});
+  if(error)return toast('Could not save: '+error.message,'bg-rose-500 text-white');
+  if($('#d_c')&&$('#d_c').checked)ledger(isAgent()?'d':'c',a,'',name);
+  toast('Debt recorded');openDebts();
+}
+function payDebt(id){
+  const x=debtRows.find(r=>r.id===id),rem=x.amount-x.paid;
+  modal(`<h3 class="text-xl font-bold mb-1">Payment from ${x.name.replace(/</g,'&lt;')}</h3><p class="text-sm text-slate-500 dark:text-slate-400 mb-4">Still owes ${fmt(rem)}.</p>
+  <input id="p_a" type="number" inputmode="numeric" class="${inp}" value="${rem}">
+  <select id="p_m" class="${inp} mt-3 !text-base">${shiftOpen()?'<option value="cash">Paid cash (into drawer)</option><option value="transfer">Paid by transfer (to account)</option>':''}<option value="none">Don’t add to today’s ledger</option></select>
+  <button class="${btn} w-full mt-4 bg-emerald-400 text-slate-950" onclick="doPay(${id})">Save payment</button>`);
+}
+async function doPay(id){
+  const x=debtRows.find(r=>r.id===id),a=v('p_a'),m=$('#p_m').value,rem=x.amount-x.paid;
+  if(a<=0||a>rem)return toast('Enter an amount up to '+fmt(rem),'bg-rose-500 text-white');
+  const np=Number(x.paid)+a;
+  const {error}=await sb.from('debts').update({paid:np,settled_at:np>=x.amount?new Date().toISOString():null}).eq('id',id);
+  if(error)return toast('Could not save: '+error.message,'bg-rose-500 text-white');
+  if(m!=='none')ledger('r',a,m,x.name);
+  toast(np>=x.amount?x.name+' has paid in full':'Payment recorded');openDebts();
+}
+
+// ===== EXPENSES & NET PROFIT (Premium, owner) =====
+const EXP=['Rent','Generator / fuel','Staff wages','Data & airtime','Terminal / maintenance','Other'];
+async function openExpenses(){
+  modal('<div class="text-sm text-slate-500">Loading…</div>');
+  if(!premium)return setPop(mHead('Expenses & net profit','wallet')+lockBox('Expenses and net profit'));
+  const ms=ymd().slice(0,8)+'01';
+  const [a,b]=await Promise.all([sb.from('expenses').select('*').gte('date',ms).order('date',{ascending:false}),sb.from('shifts').select('data').gte('date',ms)]);
+  if(a.error)return setPop(mHead('Expenses & net profit','wallet')+'<div class="text-sm text-rose-500">Could not load: '+a.error.message+'</div>');
+  const ex=a.data||[],tot=sum(ex,x=>+x.amount),comm=sum(b.data||[],r=>stats(r.data).profit),net=comm-tot,cat={};
+  ex.forEach(x=>cat[x.category]=(cat[x.category]||0)+ +x.amount);
+  const sub='text-xs text-slate-500 dark:text-slate-400',inp2=`${inp} !text-base mb-2`;
+  setPop(mHead('Expenses & net profit','wallet')+`<div class="${sub} mb-2">${new Date().toLocaleDateString('en-NG',{month:'long',year:'numeric'})}</div>
+  <div class="rounded-2xl p-4 bg-slate-100 dark:bg-slate-800 space-y-1"><div class="flex justify-between text-sm"><span>Commissions earned</span><b class="num text-emerald-500">${fmt(comm)}</b></div>
+  <div class="flex justify-between text-sm"><span>Expenses</span><b class="num text-rose-400">${fmt(tot)}</b></div>
+  <div class="flex justify-between border-t border-slate-300 dark:border-slate-700 pt-2"><b>Net profit (what you keep)</b><b class="num text-xl ${net<0?'text-rose-500':'text-emerald-500'}">${fmt(net)}</b></div></div>
+  ${Object.keys(cat).length?`<div class="mt-3 text-sm">${Object.keys(cat).map(k=>`<div class="flex justify-between py-1"><span>${k}</span><b class="num">${fmt(cat[k])}</b></div>`).join('')}</div>`:''}
+  ${ex.slice(0,15).map(x=>`<div class="flex items-center text-sm py-2 border-t border-slate-200 dark:border-slate-800"><div class="min-w-0 flex-1"><div>${x.category}${x.note?' · '+x.note.replace(/</g,'&lt;'):''}</div><div class="${sub}">${x.date}</div></div><b class="num">${fmt(+x.amount)}</b><button class="text-xs text-rose-500 ml-3" onclick="delExpense(${x.id},this)">remove</button></div>`).join('')}
+  <div class="font-bold mt-4 mb-2">Add an expense</div>
+  <select id="e_c" class="${inp2}">${EXP.map(c=>`<option>${c}</option>`).join('')}</select>
+  <input id="e_a" type="number" inputmode="numeric" class="${inp2}" placeholder="Amount (₦)"><input id="e_n" class="${inp2}" placeholder="Note (optional)">
+  <button class="${btn} w-full bg-emerald-400 text-slate-950" onclick="addExpense()">Save expense</button>`);
+}
+async function addExpense(){
+  const a=v('e_a');if(a<=0)return toast('Enter an amount','bg-rose-500 text-white');
+  const {error}=await sb.from('expenses').insert({user_id:BIZ,category:$('#e_c').value,amount:a,note:$('#e_n').value.trim(),date:ymd()});
+  if(error)return toast('Could not save: '+error.message,'bg-rose-500 text-white');
+  toast('Expense saved');openExpenses();
+}
+async function delExpense(id,b){
+  if(!b.dataset.s){b.dataset.s=1;b.textContent='sure?';setTimeout(()=>{b.dataset.s='';b.textContent='remove'},3000);return}
+  await sb.from('expenses').delete().eq('id',id);openExpenses();
+}
+
+function cfgBanner(){
+  if(cloud||['localhost','127.0.0.1',''].includes(location.hostname))return '';
+  return `<section class="rounded-2xl p-4 bg-rose-500/10 border border-rose-500/40 text-sm"><b class="text-rose-500">Not connected to the database.</b><div class="mt-1">Login, sync, staff and Premium are off because SB_URL and SB_KEY are empty in <code>config.js</code>. Fill them in and redeploy.</div></section>`;
+}
+
+
+// ===== BUSINESS MODES =====
+const MODES={agent:{n:'POS cash agent',d:'Withdrawals and transfers where you hand out cash',ic:'credit-card'},
+  gas:{n:'Gas refilling',d:'Sales by kg, tank stock and gas-loss tracking',ic:'flame',cats:['3kg','5kg','6kg','12.5kg','25kg','50kg','New cylinder','Accessories']},
+  food:{n:'Restaurant / food',d:'Sales by cash, POS and transfer, with staff accountability',ic:'utensils',cats:['Food','Drinks','Takeaway','Delivery','Other']},
+  retail:{n:'Small shop / grocery',d:'Sales, POS reconciliation and credit customers',ic:'shopping-basket',cats:['Provisions','Drinks','Toiletries','Fresh produce','Other']},
+  bar:{n:'Bar / lounge / club',d:'Drinks and food income with staff accountability',ic:'wine'},
+  hotel:{n:'Hotel / guest house',d:'Rooms, restaurant and bar income with staff accountability',ic:'bed-double'},
+  fuel:{n:'Filling station',d:'Pump meter readings checked against the money collected',ic:'fuel'},
+  cement:{n:'Cement / building materials',d:'Sales by bags, stock-loss tracking and credit customers',ic:'warehouse'},
+  multi:{n:'Supermarket / large store',d:'Cashier shift totals checked against your own store system',ic:'store'}};
+const isAgent=()=>!S.set.mode||S.set.mode==='agent',isGas=()=>S.set.mode==='gas',prem=()=>!cloud||premium;
+const CARD='rounded-2xl p-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800';
+function maybeAskMode(){
+  if(S.set.mode||(plan.role==='staff'))return;
+  if(S.hist.length||S.day.tx.length||S.day.open!==null){S.set.mode='agent';persist();return}
+  openMode(true);
+}
+function openMode(first){
+  modal(`<h3 class="text-xl font-bold mb-1">${first?'What kind of business do you run?':'Business type'}</h3>
+  <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">${first?'We’ll set the app up for how you work. You can change this later in Settings.':'Changing this only affects new entries. Past records stay as they are.'}</p>
+  ${Object.keys(MODES).map(k=>`<button class="${btn} w-full mb-2 text-left flex items-center gap-3 bg-slate-100 dark:bg-slate-800 ${S.set.mode===k?'ring-2 ring-emerald-400':''}" onclick="setMode('${k}')"><i data-lucide="${MODES[k].ic}" class="w-6 h-6 text-emerald-400 shrink-0"></i><span><b>${MODES[k].n}</b><span class="block text-xs font-normal text-slate-500 dark:text-slate-400">${MODES[k].d}</span></span></button>`).join('')}`);
+}
+function setMode(k){S.set.mode=k;save();pushSet();closeM();render();toast(MODES[k].n+' mode is on');maybeOnboard()}
+function saleActions(open,closed){
+  const off=!open||closed?'disabled':'',tot=costless();
+  const big=tot?`<button ${off} class="${btn} !py-5 text-left bg-emerald-400 text-slate-950 disabled:opacity-40" onclick="openTotals()"><i data-lucide="calculator" class="w-6 h-6 mb-1"></i><div>Shift totals</div><div class="text-xs font-normal opacity-70">Cash, POS, transfer</div></button>`
+   :`<button ${off} class="${btn} !py-5 text-left bg-emerald-400 text-slate-950 disabled:opacity-40" onclick="openSale()"><i data-lucide="shopping-bag" class="w-6 h-6 mb-1"></i><div>New sale</div><div class="text-xs font-normal opacity-70">Cash, POS or transfer</div></button>`;
+  return `<section class="grid grid-cols-2 gap-3">${big}
+  <button ${off} class="${btn} !py-5 text-left bg-rose-500/15 text-rose-400 disabled:opacity-40" onclick="openDebts()"><i data-lucide="notebook-pen" class="w-6 h-6 mb-1"></i><div>Credit sale</div><div class="text-xs font-normal opacity-70">Customer pays later</div></button>
+  ${isFuel()?`<button ${off} class="${btn} col-span-2 !py-3 bg-orange-400/15 text-orange-400 disabled:opacity-40" onclick="openMeter()">Pump meter reading</button>`:''}
+  <button ${off} class="${btn} col-span-2 !py-3 bg-slate-200 dark:bg-slate-800 disabled:opacity-40" onclick="openPayout()">Cash paid out of the till (supplies, fuel, wages)</button></section>`;
+}
+function openSaleGas(){
+  const gas=isGas();
+  modal(`<h3 class="text-xl font-bold mb-4">New sale</h3>
+  <input id="s_a" type="number" inputmode="numeric" class="${inp}" placeholder="Total amount (₦)" autofocus>
+  <select id="s_m" class="${inp} mt-3 !text-base"><option value="cash">Paid cash</option><option value="pos">Paid by POS card</option><option value="transfer">Paid by transfer</option></select>
+  <select id="s_k" class="${inp} mt-3 !text-base" onchange="if(isGas()){const n=parseFloat(this.value);if(n)$('#s_q').value=n}">${MODES[S.set.mode].cats.map(c=>`<option>${c}</option>`).join('')}</select>
+  <input id="s_q" type="number" step="any" inputmode="decimal" class="${inp} mt-3 !text-base" placeholder="${gas?'Quantity sold (kg)':'Quantity (optional)'}">
+  <input id="s_c" type="number" inputmode="numeric" class="${inp} mt-3 !text-base" placeholder="Cost of goods ₦ (optional, gives your profit)">
+  <input id="s_n" class="${inp} mt-3 !text-base" placeholder="Note (optional)">
+  <button class="${btn} w-full mt-4 bg-emerald-400 text-slate-950" onclick="doSale()">Record sale</button>`);
+  if(gas)$('#s_q').value=parseFloat(MODES.gas.cats[0])||'';
+}
+function doSale(){
+  const a=v('s_a');if(a<=0)return toast('Enter the amount','bg-rose-500 text-white');
+  const m=$('#s_m').value,k=$('#s_k').value,cost=v('s_c'),note=$('#s_n').value.trim();
+  S.day.tx.unshift({id:Math.random().toString(36).slice(2),t:Date.now(),type:'s',a,fee:0,cost,profit:a-cost,src:'manual',method:m,cat:k,qty:v('s_q')||0,
+    ref:k+' · '+{cash:'Cash',pos:'POS',transfer:'Transfer'}[m]+(note?' · '+note:''),cashOut:m==='cash'?-a:0,digIn:m==='cash'?0:a});
+  save();closeM();render();toast('Sale recorded · '+fmt(a));
+}
+const isStock=()=>isGas()||S.set.mode==='cement',unit=()=>isGas()?'kg':'bags',isFuel=()=>S.set.mode==='fuel',costless=()=>isFuel()||S.set.mode==='multi',biz=()=>!cloud||bizTier,rid=()=>Math.random().toString(36).slice(2);
+function flagKg(label,x,u='kg'){
+  const c=x>=0?'bg-emerald-500/15 text-emerald-500':'bg-rose-500/15 text-rose-500',w=x===0?'BALANCED':x>0?'EXTRA +'+x+' '+u:'LOSS '+x+' '+u;
+  return `<div class="rounded-xl p-3 ${c} flex justify-between items-center"><span class="text-sm">${label}</span><b class="text-base num">${w}</b></div>`;
+}
+function gasCard(d,st){
+  if(!isStock())return '';
+  const sk=d.stock=d.stock||{open:null,add:[]},add=sum(sk.add,x=>x.a),exp=(sk.open||0)+add-st.qty,sub='text-xs text-slate-500 dark:text-slate-400',u=unit();
+  const cell=(l,x,c)=>`<div class="rounded-xl p-2 bg-slate-100 dark:bg-slate-800"><div class="${sub}">${l}</div><div class="font-black num ${c||''}">${Math.round(x*100)/100}</div></div>`;
+  return `<section class="${CARD}"><div class="font-bold mb-3 flex items-center gap-2"><i data-lucide="${isGas()?'flame':'package'}" class="w-4 h-4 text-orange-400"></i>${isGas()?'Gas tank stock':'Warehouse stock'} (${u})${prem()?'':'<i data-lucide="lock" class="w-3 h-3 text-amber-400"></i>'}</div>
+  <div class="grid grid-cols-4 gap-2 text-center text-sm">${cell('Opening',sk.open||0)}${cell('Delivered',add)}${cell('Sold',st.qty)}${cell('Expected left',exp,'text-orange-400')}</div>
+  ${d.closed?'':`<div class="flex gap-2 mt-3"><button class="${btn} !py-2 text-sm flex-1 bg-slate-200 dark:bg-slate-800" onclick="setStock('open')">Set opening stock</button><button class="${btn} !py-2 text-sm flex-1 bg-slate-200 dark:bg-slate-800" onclick="setStock('add')">+ Delivery</button></div>`}
+  <div class="${sub} mt-2">At closing, count the stock and enter it. Any gap shows as ${isGas()?'gas':'stock'} loss.</div></section>`;
+}
+function setStock(kind){
+  if(!prem())return openPremium();
+  modal(`<h3 class="text-xl font-bold mb-4">${kind==='open'?'Opening stock':'Delivery received'} (${unit()})</h3>
+  <input id="k_a" type="number" step="any" inputmode="decimal" class="${inp}" autofocus><button class="${btn} w-full mt-4 bg-emerald-400 text-slate-950" onclick="doStock('${kind}')">Save</button>`);
+}
+// ----- filling station: pump meters -----
+function meterTotals(d){
+  const m={};
+  d.tx.filter(t=>t.type==='m'&&!t.voided).sort((a,b)=>a.t-b.t).forEach(t=>{const p=m[t.pump]=m[t.pump]||{n:t.pump,fuel:t.fuel,p:t.p,o:null,c:null};if(t.which==='open')p.o=t.reading;else p.c=t.reading;p.fuel=t.fuel;p.p=t.p});
+  const rows=Object.values(m).filter(r=>r.o!==null&&r.c!==null).map(r=>({...r,l:Math.round((r.c-r.o)*100)/100,exp:Math.round((r.c-r.o)*r.p)}));
+  return {rows,open:Object.values(m),expected:sum(rows,r=>r.exp)};
+}
+function meterCard(d){
+  if(!isFuel())return '';
+  const mt=meterTotals(d),sub='text-xs text-slate-500 dark:text-slate-400';
+  return `<section class="${CARD}"><div class="font-bold mb-2 flex items-center gap-2"><i data-lucide="fuel" class="w-4 h-4 text-orange-400"></i>Pump meters${biz()?'':'<i data-lucide="lock" class="w-3 h-3 text-amber-400"></i>'}</div>
+  ${mt.open.length?mt.open.map(r=>`<div class="flex justify-between text-sm py-1"><span>${esc(r.n)} · ${esc(r.fuel)} <span class="${sub}">open ${r.o??'—'} · close ${r.c??'—'}</span></span><b class="num">${r.o!==null&&r.c!==null?Math.round((r.c-r.o)*100)/100+' L · '+fmt((r.c-r.o)*r.p):'—'}</b></div>`).join(''):`<div class="${sub}">No readings yet. Add each pump’s opening reading at the start of the shift.</div>`}
+  <div class="flex justify-between border-t border-slate-200 dark:border-slate-800 pt-2 mt-2"><span>Expected from meters</span><b class="num text-orange-400">${fmt(mt.expected)}</b></div>
+  ${d.closed?'':`<button class="${btn} w-full mt-3 !py-2 text-sm bg-slate-200 dark:bg-slate-800" onclick="openMeter()">+ Meter reading</button>`}
+  <div class="${sub} mt-2">When you close, the app compares this with the cash, POS and transfers you recorded.</div></section>`;
+}
+function openMeter(){
+  if(!biz())return openPremium();
+  const ms=meterTotals(S.day).open,lp=(S.day.tx.find(t=>t.type==='m')||{}).p||'';
+  modal(`<h3 class="text-xl font-bold mb-4">Pump meter reading</h3>
+  <select id="m_w" class="${inp} !text-base"><option value="open">Opening reading</option><option value="close">Closing reading</option></select>
+  <input id="m_p" list="pl" class="${inp} mt-3 !text-base" placeholder="Pump name (e.g. Pump 1)"><datalist id="pl">${ms.map(m=>`<option value="${esc(m.n)}">`).join('')}</datalist>
+  <select id="m_f" class="${inp} mt-3 !text-base"><option>PMS (petrol)</option><option>AGO (diesel)</option><option>DPK (kerosene)</option></select>
+  <input id="m_r" type="number" step="any" inputmode="decimal" class="${inp} mt-3 !text-base" placeholder="Meter reading (litres)">
+  <input id="m_c" type="number" step="any" inputmode="decimal" class="${inp} mt-3 !text-base" placeholder="Price per litre (₦)" value="${lp}">
+  <button class="${btn} w-full mt-4 bg-emerald-400 text-slate-950" onclick="doMeter()">Save reading</button>`);
+}
+function doMeter(){
+  const pump=$('#m_p').value.trim(),r=parseFloat($('#m_r').value),p=v('m_c'),w=$('#m_w').value,f=$('#m_f').value;
+  if(!pump||isNaN(r)||p<=0)return toast('Enter the pump, reading and price per litre','bg-rose-500 text-white');
+  S.day.tx.unshift({id:rid(),t:Date.now(),type:'m',pump,fuel:f,p,which:w,reading:r,a:0,fee:0,cost:0,profit:0,cashOut:0,digIn:0,src:'manual',ref:pump+' · '+f+' · '+(w==='open'?'opening ':'closing ')+r});
+  save();closeM();render();
+}
+// ----- stations and stores: enter shift totals instead of every sale -----
+function openTotals(){
+  if(!biz())return openPremium();
+  modal(`<h3 class="text-xl font-bold mb-1">Shift totals</h3><p class="text-sm text-slate-500 dark:text-slate-400 mb-4">Enter the totals from your ${isFuel()?'pump report':'store system'} for this ${isFuel()?'pump or island':'till or cashier'}.</p>
+  <input id="t_l" class="${inp} !text-base" placeholder="${isFuel()?'Pump / island (optional)':'Till or cashier (optional)'}">
+  <input id="t_c" type="number" inputmode="numeric" class="${inp} mt-3" placeholder="Cash total (₦)"><input id="t_p" type="number" inputmode="numeric" class="${inp} mt-3" placeholder="POS card total (₦)"><input id="t_t" type="number" inputmode="numeric" class="${inp} mt-3" placeholder="Transfer total (₦)">
+  <button class="${btn} w-full mt-4 bg-emerald-400 text-slate-950" onclick="doTotals()">Record totals</button>`);
+}
+function doTotals(){
+  const l=$('#t_l').value.trim()||'Shift total',vals=[['cash',v('t_c')],['pos',v('t_p')],['transfer',v('t_t')]].filter(x=>x[1]>0);
+  if(!vals.length)return toast('Enter at least one amount','bg-rose-500 text-white');
+  vals.forEach(([m,a])=>S.day.tx.unshift({id:rid(),t:Date.now(),type:'s',a,fee:0,cost:0,profit:0,src:'manual',method:m,cat:l,qty:0,ref:l+' · '+{cash:'Cash',pos:'POS',transfer:'Transfer'}[m]+' · shift total',cashOut:m==='cash'?-a:0,digIn:m==='cash'?0:a}));
+  save();closeM();render();toast('Totals recorded');
+}
+function doStock(kind){
+  const a=v('k_a');if(a<=0&&kind==='add')return toast('Enter the kg','bg-rose-500 text-white');
+  const sk=S.day.stock=S.day.stock||{open:null,add:[]};
+  if(kind==='open')sk.open=a;else sk.add.push({a,t:Date.now()});
+  save();closeM();render();
+}
+
+
+// ===== SALES WITH ITEMS (restaurant / grocery), PAYOUTS, ITEM SUMMARY =====
+const esc=x=>String(x).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let cart=[],cartM='cash',cartCost='';
+function openSale(){if(isGas())return openSaleGas();cart=[];cartM='cash';cartCost='';drawSale()}
+function drawSale(){
+  const menu=S.set.menu||[],own=plan.role!=='staff',total=sum(cart,x=>x.q*x.p),sub='text-xs text-slate-500 dark:text-slate-400';
+  const h=`<div class="flex items-center mb-3"><h3 class="text-xl font-bold">New sale</h3><button class="ml-auto text-sm text-sky-500" onclick="closeM()">Cancel</button></div>
+  ${menu.length?`<div class="${sub} mb-1">Tap an item to add it</div><div class="flex flex-wrap gap-2 mb-3">${menu.map((m,i)=>`<button class="px-3 py-2 rounded-xl bg-slate-200 dark:bg-slate-800 text-sm" onclick="addMenu(${i})">${esc(m.n)} <b class="num">${fmt(m.p)}</b></button>`).join('')}</div>`:''}
+  ${cart.map((x,i)=>`<div class="flex items-center gap-2 py-2 border-b border-slate-200 dark:border-slate-800"><div class="flex-1 min-w-0"><div class="font-semibold truncate">${esc(x.n)}</div><div class="${sub}">${fmt(x.p)} each</div></div>
+    <button class="w-8 h-8 rounded-lg bg-slate-200 dark:bg-slate-800 font-bold" onclick="incLine(${i},-1)">−</button><b class="num w-6 text-center">${x.q}</b><button class="w-8 h-8 rounded-lg bg-slate-200 dark:bg-slate-800 font-bold" onclick="incLine(${i},1)">+</button>
+    <b class="num w-20 text-right">${fmt(x.q*x.p)}</b></div>`).join('')}
+  <div class="grid grid-cols-[1fr_6rem] gap-2 mt-3"><input id="c_n" class="${inp} !text-base" placeholder="Item name"><input id="c_p" type="number" inputmode="numeric" class="${inp} !text-base" placeholder="Price ₦"></div>
+  ${own?`<label class="flex items-center gap-2 text-xs mt-2"><input id="c_s" type="checkbox" checked> Save to quick menu</label>`:''}
+  <button class="${btn} w-full mt-2 !py-2 bg-slate-200 dark:bg-slate-800" onclick="addLine()">+ Add item</button>
+  <div class="flex justify-between items-center mt-4"><span class="font-semibold">Total</span><b class="text-2xl num text-emerald-500">${fmt(total)}</b></div>
+  <select id="s_m" class="${inp} mt-3 !text-base" onchange="cartM=this.value"><option value="cash" ${cartM==='cash'?'selected':''}>Paid cash</option><option value="pos" ${cartM==='pos'?'selected':''}>Paid by POS card</option><option value="transfer" ${cartM==='transfer'?'selected':''}>Paid by transfer</option></select>
+  <input id="s_c" type="number" inputmode="numeric" class="${inp} mt-3 !text-base" placeholder="Cost of goods ₦ (optional, gives your profit)" value="${cartCost}" oninput="cartCost=this.value">
+  <button class="${btn} w-full mt-4 bg-emerald-400 text-slate-950" onclick="doSaleLines()">Record sale</button>
+  ${own?`<button class="w-full mt-2 text-sm text-sky-500" onclick="openMenu()">Edit quick menu</button>`:''}`;
+  if($('#modal .pop'))setPop(h);else modal(h);
+}
+function addMenu(i){const m=S.set.menu[i],x=cart.find(c=>c.n===m.n&&c.p===m.p);x?x.q++:cart.push({n:m.n,q:1,p:m.p});drawSale()}
+function incLine(i,d){cart[i].q+=d;if(cart[i].q<=0)cart.splice(i,1);drawSale()}
+function addLine(){
+  const n=$('#c_n').value.trim(),p=v('c_p');if(!n||p<=0)return toast('Enter the item name and price','bg-rose-500 text-white');
+  const sv=$('#c_s');
+  if(sv&&sv.checked){S.set.menu=S.set.menu||[];const e=S.set.menu.find(m=>m.n.toLowerCase()===n.toLowerCase());e?e.p=p:S.set.menu.push({n,p});save();pushSet()}
+  cart.push({n,q:1,p});drawSale();
+}
+function doSaleLines(){
+  if(!cart.length)return toast('Add at least one item','bg-rose-500 text-white');
+  const a=sum(cart,x=>x.q*x.p),m=$('#s_m').value,cost=v('s_c');
+  S.day.tx.unshift({id:Math.random().toString(36).slice(2),t:Date.now(),type:'s',a,fee:0,cost,profit:a-cost,src:'manual',method:m,lines:cart.map(x=>({n:x.n,q:x.q,p:x.p})),qty:sum(cart,x=>x.q),
+    ref:cart.map(x=>x.n+(x.q>1?' ×'+x.q:'')).join(', ')+' · '+{cash:'Cash',pos:'POS',transfer:'Transfer'}[m],cashOut:m==='cash'?-a:0,digIn:m==='cash'?0:a});
+  save();closeM();render();toast('Sale recorded · '+fmt(a));
+}
+function openMenu(){
+  const menu=S.set.menu||[];
+  modal(`<div class="flex items-center mb-3"><h3 class="text-xl font-bold">Quick menu</h3><button class="ml-auto text-sm text-sky-500" onclick="drawSale()">Back to sale</button></div>
+  <p class="text-sm text-slate-500 dark:text-slate-400 mb-3">Items you sell often, with their prices. Attendants can tap them to sell fast.</p>
+  ${menu.map((m,i)=>`<div class="flex items-center py-2 border-b border-slate-200 dark:border-slate-800"><span class="flex-1">${esc(m.n)}</span><b class="num mr-3">${fmt(m.p)}</b><button class="text-rose-500 text-sm" onclick="delMenu(${i})">remove</button></div>`).join('')||'<div class="text-sm text-slate-500">No items yet.</div>'}
+  <div class="grid grid-cols-[1fr_6rem] gap-2 mt-4"><input id="m_n" class="${inp} !text-base" placeholder="Item name"><input id="m_p" type="number" inputmode="numeric" class="${inp} !text-base" placeholder="Price ₦"></div>
+  <button class="${btn} w-full mt-2 bg-emerald-400 text-slate-950" onclick="addMenuItem()">Save item</button>`);
+}
+function addMenuItem(){
+  const n=$('#m_n').value.trim(),p=v('m_p');if(!n||p<=0)return toast('Enter the item name and price','bg-rose-500 text-white');
+  S.set.menu=S.set.menu||[];const e=S.set.menu.find(m=>m.n.toLowerCase()===n.toLowerCase());e?e.p=p:S.set.menu.push({n,p});save();pushSet();openMenu();
+}
+function delMenu(i){S.set.menu.splice(i,1);save();pushSet();openMenu()}
+function itemsCard(d){
+  if(isAgent())return '';
+  const m={};
+  d.tx.forEach(t=>{if(t.type!=='s')return;
+    (t.lines||[{n:t.cat||'Sale',q:t.qty||1,p:t.a}]).forEach(l=>{const k=l.n,o=m[k]=m[k]||{q:0,a:0};o.q+=l.q;o.a+=t.lines?l.q*l.p:t.a})});
+  const rows=Object.keys(m).sort((a,b)=>m[b].a-m[a].a).slice(0,8);
+  if(!rows.length)return '';
+  return `<section class="${CARD}"><div class="font-bold mb-2">Sales by item today</div>${rows.map(k=>`<div class="flex justify-between text-sm py-1"><span>${esc(k)} <span class="text-slate-500">× ${Math.round(m[k].q*100)/100}</span></span><b class="num">${fmt(m[k].a)}</b></div>`).join('')}</section>`;
+}
+function openPayout(){
+  modal(`<h3 class="text-xl font-bold mb-1">Cash paid out of the till</h3><p class="text-sm text-slate-500 dark:text-slate-400 mb-4">Record any cash taken out for the business, so tonight’s cash count still balances.</p>
+  <input id="o_a" type="number" inputmode="numeric" class="${inp}" placeholder="Amount (₦)" autofocus>
+  <select id="o_r" class="${inp} mt-3 !text-base">${['Supplies / ingredients','Fuel','Wages','Change given','Other'].map(x=>`<option>${x}</option>`).join('')}</select>
+  <input id="o_n" class="${inp} mt-3 !text-base" placeholder="Note (optional)">
+  <button class="${btn} w-full mt-4 bg-rose-500 text-white" onclick="doPayout()">Record payout</button>`);
+}
+function doPayout(){
+  const a=v('o_a');if(a<=0)return toast('Enter the amount','bg-rose-500 text-white');
+  const n=$('#o_n').value.trim();
+  S.day.tx.unshift({id:Math.random().toString(36).slice(2),t:Date.now(),type:'o',a,fee:0,cost:0,profit:0,src:'manual',ref:$('#o_r').value+(n?' · '+n:''),cashOut:a,digIn:0});
+  save();closeM();render();toast('Payout recorded · '+fmt(a));
+}
+
+
+// ===== VOID CONTROL: owner voids, attendants request, everything is logged =====
+let voidRows=[];
+function voidBtn(t){
+  if(S.day.closed)return '';
+  if(plan.role==='staff')return t.reqVoid?'<span class="text-xs text-amber-400">void requested</span>':`<button class="text-xs text-rose-500" onclick="askVoid('${t.id}')">request void</button>`;
+  return `<button class="text-xs text-rose-500" onclick="askVoid('${t.id}')">void</button>`;
+}
+function askVoid(id){
+  const st=plan.role==='staff';
+  modal(`<h3 class="text-xl font-bold mb-1">${st?'Request a void':'Void this transaction'}</h3><p class="text-sm text-slate-500 dark:text-slate-400 mb-4">${st?'The owner sees your reason and decides. Nothing changes until they approve.':'It stays in the ledger, crossed out, with your reason.'}</p>
+  <input id="v_r" class="${inp} !text-base" placeholder="Reason (e.g. wrong amount)" autofocus>
+  <button class="${btn} w-full mt-4 ${st?'bg-amber-400 text-slate-950':'bg-rose-500 text-white'}" onclick="confirmVoid('${id}')">${st?'Send request':'Void'}</button>`);
+}
+async function confirmVoid(id){
+  const reason=$('#v_r').value.trim();if(!reason)return toast('Give a reason','bg-rose-500 text-white');
+  const t=S.day.tx.find(x=>x.id===id);if(!t)return;
+  if(plan.role==='staff'){
+    const {error}=await sb.from('tx_voids').insert({user_id:BIZ,shift_id:S.day.id,tx_id:id,staff_id:user.id,status:'requested',reason});
+    if(error)return toast('Could not send: '+error.message,'bg-rose-500 text-white');
+    t.reqVoid=true;save();closeM();render();return toast('Request sent to the owner');
+  }
+  if(cloud&&user){const {error}=await sb.from('tx_voids').insert({user_id:BIZ,shift_id:S.day.id,tx_id:id,staff_id:user.id,status:'voided',reason,decided_by:user.id,decided_at:new Date().toISOString()});if(error)return toast('Could not void: '+error.message,'bg-rose-500 text-white')}
+  t.voided={at:Date.now(),reason,by:'owner'};save();closeM();render();toast('Transaction voided');
+}
+function openVoids(){
+  const sub='text-xs text-slate-500 dark:text-slate-400',find=v=>{const r=teamRows.find(x=>x.id===v.shift_id);return r&&r.data.tx.find(y=>y.id===v.tx_id)};
+  const row=(v,acts)=>{const t=find(v);return `<div class="rounded-xl p-3 bg-slate-100 dark:bg-slate-800 mb-2 text-sm"><div class="flex justify-between"><b>${esc(teamNames[v.staff_id]||'')}</b><b class="num">${t?fmt(t.a):''}</b></div>
+    <div class="${sub}">${t?esc(t.ref||TY(t).l):'Transaction'} · ${new Date(v.created_at).toLocaleString('en-NG',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div><div class="mt-1">Reason: ${esc(v.reason)}</div>${acts}</div>`};
+  const pend=voidRows.filter(v=>v.status==='requested'),log=voidRows.filter(v=>v.status!=='requested');
+  modal(mHead('Voids','shield-check')+`<div class="font-bold mb-2">Waiting for you (${pend.length})</div>
+  ${pend.map(v=>row(v,`<div class="flex gap-2 mt-2"><button class="${btn} !py-2 text-sm flex-1 bg-rose-500 text-white" onclick="decideVoid(${v.id},'voided')">Approve void</button><button class="${btn} !py-2 text-sm flex-1 bg-slate-300 dark:bg-slate-700" onclick="decideVoid(${v.id},'rejected')">Reject</button></div>`)).join('')||`<div class="${sub} mb-2">Nothing waiting.</div>`}
+  <div class="font-bold mt-4 mb-2">Log (30 days)</div>
+  ${log.map(v=>row(v,`<div class="mt-1 text-xs font-semibold ${v.status==='voided'?'text-rose-400':'text-slate-500'}">${v.status==='voided'?'VOIDED':'REJECTED'}</div>`)).join('')||`<div class="${sub}">No voids yet.</div>`}
+  <button class="w-full mt-3 text-sm text-sky-500" onclick="openTeam()">Back to team</button>`);
+}
+async function decideVoid(id,status){
+  const {error}=await sb.from('tx_voids').update({status,decided_by:user.id,decided_at:new Date().toISOString()}).eq('id',id);
+  if(error)return toast('Could not save: '+error.message,'bg-rose-500 text-white');
+  toast(status==='voided'?'Voided and logged':'Request rejected');await openTeam();openVoids();
+}
+function openStaffTx(id){
+  const sub='text-xs text-slate-500 dark:text-slate-400',list=[];
+  teamRows.filter(r=>r.staff_id===id).forEach(r=>r.data.tx.forEach(t=>list.push({r,t})));list.sort((a,b)=>b.t.t-a.t.t);
+  modal(mHead(esc(teamNames[id]||'')+' · transactions','list')+`<div class="${sub} mb-2">Last 30 days. Voiding keeps a record and needs a reason.</div>
+  ${list.slice(0,40).map(({r,t})=>`<div class="flex items-center py-2 border-b border-slate-200 dark:border-slate-800 text-sm ${t.voided?'opacity-50':''}"><div class="flex-1 min-w-0"><div class="font-semibold num ${t.voided?'line-through':''}">${fmt(t.a)} <span class="text-xs font-normal ${sub}">${TY(t).l}</span></div>
+    <div class="${sub} truncate">${new Date(t.t).toLocaleString('en-NG',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}${t.ref?' · '+esc(t.ref):''}</div></div>
+    ${t.voided?'<span class="text-xs text-slate-500">voided</span>':(r.data.closed?'':`<button class="text-xs text-rose-500" onclick="askStaffVoid(${r.id},'${t.id}','${id}')">void</button>`)}</div>`).join('')||`<div class="${sub}">No transactions.</div>`}
+  <button class="w-full mt-3 text-sm text-sky-500" onclick="openTeam()">Back to team</button>`);
+}
+function askStaffVoid(sid,tid,stid){
+  modal(`<h3 class="text-xl font-bold mb-1">Void this transaction</h3><p class="text-sm text-slate-500 dark:text-slate-400 mb-4">It stays in the log with your reason.</p>
+  <input id="v_r" class="${inp} !text-base" placeholder="Reason" autofocus><button class="${btn} w-full mt-4 bg-rose-500 text-white" onclick="doStaffVoid(${sid},'${tid}','${stid}')">Void</button>`);
+}
+async function doStaffVoid(sid,tid,stid){
+  const reason=$('#v_r').value.trim();if(!reason)return toast('Give a reason','bg-rose-500 text-white');
+  const {error}=await sb.from('tx_voids').insert({user_id:BIZ,shift_id:sid,tx_id:tid,staff_id:stid,status:'voided',reason,decided_by:user.id,decided_at:new Date().toISOString()});
+  if(error)return toast('Could not save: '+error.message,'bg-rose-500 text-white');
+  toast('Voided and logged');await openTeam();openStaffTx(stid);
+}
+
+
+// ===== ADD-ONLY LEDGER: staff can add entries but never edit or delete them =====
+async function pushLedger(d){
+  const done=new Set(d._p||[]),rows=[];
+  const add=(id,kind,data)=>{if(!done.has(id))rows.push({user_id:BIZ,staff_id:user.id,shift_id:d.id,shift_date:d.date,entry_id:id,kind,data})};
+  if(d.open!==null&&d.open!==undefined)add('open','open',{a:d.open});
+  d.inj.forEach(x=>add('i'+x.t,'inj',x));
+  d.tx.forEach(t=>{const {voided,reqVoid,...c}=t;add(t.id,'tx',c)});
+  if(d.closed)add('close','close',d.closed);
+  for(let i=0;i<rows.length;i+=300){
+    const part=rows.slice(i,i+300),{error}=await sb.from('ledger').upsert(part,{onConflict:'user_id,shift_id,entry_id',ignoreDuplicates:true});
+    if(error)throw error;
+    d._p=[...(d._p||[]),...part.map(r=>r.entry_id)];
+  }
+}
+async function ledgerAll(from){
+  let all=[],i=0;
+  for(;;){
+    const {data,error}=await sb.from('ledger').select('shift_id,shift_date,staff_id,kind,data').gte('shift_date',from).order('id').range(i,i+999);
+    if(error)throw error;all=all.concat(data);if(data.length<1000)break;i+=1000;
+  }
+  return all;
+}
+function buildShifts(rows){
+  const m={};
+  rows.forEach(r=>{const s=m[r.shift_id]=m[r.shift_id]||{id:r.shift_id,date:r.shift_date,staff_id:r.staff_id,data:{id:r.shift_id,date:r.shift_date,open:null,inj:[],tx:[],closed:null}},d=s.data;
+    if(r.kind==='open')d.open=r.data.a;else if(r.kind==='inj')d.inj.push(r.data);else if(r.kind==='tx')d.tx.push(r.data);else if(r.kind==='close')d.closed=r.data});
+  return Object.values(m).sort((a,b)=>b.id-a.id);
+}
+
+
+// ===== STEP-BY-STEP GUIDE + 7-STEP ONBOARDING =====
+const tourKey=()=>'pa_onb_'+(user?user.id:'local');
+const tourSeen=()=>{try{return !!localStorage.getItem(tourKey())}catch(e){return true}};
+let tourI=0,tourS=[];
+function steps7(){
+  const m=S.set.mode||'agent',st=plan.role==='staff',nm=(MODES[m]||MODES.agent).n;
+  const rec={agent:'Tap <b>Cash withdrawal</b> when a customer swipes their card and takes cash, or <b>Transfer received</b> when they send money to your account and take cash. Type the amount and your charge. The app shows the cash to give and your profit.',
+    fuel:'Tap <b>Pump meter reading</b> to add each pump’s opening reading. During the shift tap <b>Shift totals</b> to record the cash, POS and transfers collected.',
+    multi:'At the end of each cashier’s shift tap <b>Shift totals</b> and type the totals from your store system: cash, POS and transfer.',
+    gas:'Tap <b>New sale</b>, pick the cylinder size, type the kg and the amount, choose how it was paid, then record it.'}[m]||'Tap <b>New sale</b>. Add items by tapping your quick menu or typing a name and price, choose Cash, POS or Transfer, then record it.';
+  return [
+   {ic:'sparkles',t:'Welcome to POS Assistant',d:`This app records your money, balances your day and shows any shortage, so you stop calculating by hand. You are set up as <b>${nm}</b>${st?'. Your owner created your login.':'. You can change this in Settings.'}`},
+   {ic:'sunrise',t:'Start your day',d:'Tap <b>Start day</b> and enter the cash you start with'+(m==='agent'?' in the drawer.':' in the till for change. Enter 0 if you start with none.')+' Your night count is checked against this.'},
+   {ic:'shopping-bag',t:'Record your money',d:rec},
+   {ic:'wallet',t:'Cash in, cash out and credit',d:m==='agent'?'Tap <b>+ Inject cash</b> when you add cash to the till. Use <b>Customer debts</b> to track people who owe you.':'Use <b>Cash paid out of the till</b> for supplies, fuel or wages, so your count still balances. Use <b>Credit sale</b> when a customer will pay later.'},
+   {ic:'shield-check',t:'Fixing mistakes',d:st?'You can’t delete an entry. Tap <b>request void</b> and give a reason. Your owner approves it, and everything stays on record.':'Tap <b>void</b> on an entry and give a reason. It stays in the list, crossed out. Attendants can only <b>request</b> a void, and you approve it in Team.'},
+   {ic:'moon',t:'Close your day',d:'At night tap <b>Close day</b>, count the cash and type it in. The app shows <b>Balanced</b>, a red <b>Shortage</b> or a green <b>Overage</b> straight away.'+(m==='fuel'?' It also checks your pump meters against the money collected.':'')},
+   {ic:'book-open',t:'Your step-by-step guide',d:'Every function is explained in the guide. Open it any time from '+(st?'the <b>?</b> button at the top.':'<b>Settings</b> (the gear at the top) → <b>Step-by-step guide</b>, or the <b>?</b> button.')+(st?'':' Plans and your free trial are under the crown, and staff logins under Team.')}
+  ];
+}
+function startTour(){tourS=steps7();tourI=0;drawTour()}
+function drawTour(){
+  const s=tourS[tourI],last=tourI===6;
+  const h=`<div class="flex items-center mb-3"><span class="text-xs text-slate-500">Step ${tourI+1} of 7</span><button class="ml-auto text-sm text-slate-500" onclick="closeM()">Skip</button></div>
+  <div class="flex gap-1 mb-4">${tourS.map((_,i)=>`<span class="h-1 flex-1 rounded-full ${i<=tourI?'bg-emerald-400':'bg-slate-300 dark:bg-slate-700'}"></span>`).join('')}</div>
+  <div class="w-14 h-14 rounded-2xl bg-emerald-400/15 text-emerald-400 grid place-items-center mb-3"><i data-lucide="${s.ic}" class="w-7 h-7"></i></div>
+  <h3 class="text-xl font-bold mb-2">${s.t}</h3><p class="text-slate-600 dark:text-slate-300">${s.d}</p>
+  ${last?`<div class="flex gap-4 justify-center mt-4 text-xs text-slate-500"><span class="text-center"><span class="block p-2 rounded-lg bg-slate-200 dark:bg-slate-800 mb-1"><i data-lucide="circle-help" class="w-5 h-5 mx-auto"></i></span>Help</span>${plan.role==='staff'?'':'<span class="text-center"><span class="block p-2 rounded-lg bg-slate-200 dark:bg-slate-800 mb-1"><i data-lucide="settings" class="w-5 h-5 mx-auto"></i></span>Settings</span>'}</div>`:''}
+  <div class="flex gap-2 mt-5">${tourI>0?`<button class="${btn} bg-slate-200 dark:bg-slate-800" onclick="tourGo(-1)">Back</button>`:''}<button class="${btn} flex-1 bg-emerald-400 text-slate-950" onclick="${last?'openGuide()':'tourGo(1)'}">${last?'Open the guide':'Next'}</button></div>
+  ${last?`<button class="w-full mt-2 text-sm text-slate-500" onclick="closeM()">Start using the app</button>`:''}`;
+  if($('#modal .pop'))setPop(h);else modal(h);
+}
+const tourGo=d=>{tourI=Math.max(0,Math.min(6,tourI+d));drawTour()};
+function maybeOnboard(){
+  if(tourSeen())return;
+  if(!S.set.mode&&plan.role!=='staff')return; // owners pick their business type first
+  try{localStorage.setItem(tourKey(),'1')}catch(e){}
+  startTour();
+}
+function openGuide(){
+  const m=S.set.mode||'agent',st=plan.role==='staff',own=!st,sec=[];
+  const L=a=>'<ol class="list-decimal pl-5 space-y-1">'+a.map(x=>'<li>'+x+'</li>').join('')+'</ol>';
+  sec.push(['Getting started',L([st?'Open the website and sign in with the email and password your owner gave you.':'Open the website. New here? Tap <b>Create an account</b>, enter your business name, email and a password.',own?'Choose your business type when asked. You can change it later in Settings.':'Your business type is already set by your owner.','Tap <b>Start day</b> to begin.','Tip: tap <b>Install</b> or “Add to Home Screen” so it opens like an app.'])]);
+  sec.push(['1. Start your day',L(['Tap <b>Start day</b>.','Type the cash you start with'+(m==='agent'?' in your drawer.':' in the till for change. Type 0 if you start with none.'),'Tap <b>Open session</b>. The “Today’s tally” card now shows what you started with, what was injected and your profit.',own?'Made a mistake? Tap <b>edit</b> next to “Started with”. In your online account this is saved as a correction, so the record stays clear.':'Only your owner can change the starting cash after you set it.'])]);
+  const rec={agent:['Tap <b>Cash withdrawal</b> when the customer swipes a card and takes cash.','Type the amount. Your charge fills in by itself if you set a fee rule in Settings, or type it yourself.','Check the preview: cash to give, digital received and your profit.','Tap <b>Record transaction</b>.','For <b>Transfer received</b>: type the amount received and your charge. The cash given updates to match.'],
+    gas:['Tap <b>New sale</b>.','Pick the cylinder size. The kg fills in; change it if needed.','Type the total amount and how it was paid.','Tap <b>Record sale</b>.','On <b>Gas tank stock</b>, set the opening kg at the start and tap <b>+ Delivery</b> when gas arrives. At closing, enter the kg left to see any loss.'],
+    fuel:['At the start tap <b>Pump meter reading</b> for each pump: choose Opening reading, pump name, fuel, reading and price per litre.','During the shift tap <b>Shift totals</b> and type the cash, POS and transfer collected (you can name the pump).','Before closing add each pump’s <b>Closing reading</b>.','The Pump meters card shows the money expected from the meters. Closing compares it with the money you recorded.'],
+    multi:['Each cashier signs in with their own login.','At the end of the shift tap <b>Shift totals</b>, enter the till or cashier name and the cash, POS and transfer totals from your store system.','Close the day and count the cash. Any difference is flagged.']}[m]||['Tap <b>New sale</b>.','Tap an item in the quick menu to add it, or type the item name and price and tap <b>+ Add item</b>. Tick “Save to quick menu” to keep it.','Use + and − to change quantities.','Choose Paid cash, POS card or Transfer.','Optional: type your cost of goods to see profit.','Tap <b>Record sale</b>.'].concat(m==='cement'?['Cement stock is counted in bags: set opening stock and deliveries on the <b>Warehouse stock</b> card.']:[]);
+  sec.push(['2. Record your money',L(rec)]);
+  sec.push(['3. Cash in, cash out and credit',L([m==='agent'?'<b>+ Inject cash</b>: tap it when you add extra cash to the till, and type the amount.':'<b>Cash paid out of the till</b>: record cash taken out for supplies, fuel, wages or change, so your count balances.','<b>Customer debts</b> (Premium): tap it, add the customer’s name, phone and amount.','To collect, tap <b>Record payment</b>, choose cash or transfer, and save. Tap <b>Remind</b> to send a WhatsApp message.','Credit you give out is tracked so your cash count still balances.'])]);
+  sec.push(['4. Close your day',L(['Tap <b>Close day</b>.','Count the cash and type it in <b>Physical cash counted</b>.','Optionally type the bank or POS-terminal total to check the digital money.',m==='fuel'?'Your pump meters are compared with the money recorded automatically.':(m==='gas'||m==='cement')?'Type the stock you counted ('+unit()+') to see any loss.':'Look at the preview before you close.','Green <b>BALANCED</b> or <b>OVERAGE</b> is fine. Red <b>SHORTAGE</b> means money is missing. Tap <b>Close & lock day</b>.','A closed day cannot be changed. Tap <b>Start new shift</b> for the next one.'])]);
+  sec.push(['5. Fixing mistakes',L(st?['You cannot delete an entry.','Tap <b>request void</b> on it and type a reason.','Your owner sees the request and approves or rejects it.','An approved entry stays in the list, crossed out, with the reason.']:['Tap <b>void</b> on any entry and type a reason. It stays in the list, crossed out.','Attendants can only <b>request</b> a void. Approve or reject in <b>Team → Void requests & log</b>.','Wrong starting cash or injection? Use <b>edit</b> or <b>remove</b>. In your online account it is saved as a correction entry.'])]);
+  if(own){
+    sec.push(['6. Staff accounts and Team (Business plan)',L(['Tap <b>Team</b> at the top.','Under <b>Add an attendant</b> type their name, email and a password.','Give them that email and password. They sign in on the same website and see only their own shifts.','Team shows each attendant’s profit, shortages and overages, and who is on shift now.','Tap <b>View transactions & voids</b> on an attendant to see and void their entries.','Tap <b>remove</b> to cut off an attendant immediately.','Tap <b>Download shifts (CSV)</b> for your records.'])]);
+    sec.push(['7. Expenses and net profit (Premium)',L(['Tap <b>Expenses & net profit</b>.','Add rent, fuel, wages, data and other costs with the amount.','The page shows this month’s commissions minus expenses: what you actually keep.'])]);
+    sec.push(['8. Plans, free trial and paying',L(['Tap the <b>crown</b> to see Premium and Business.','Tap <b>Start my 14-day free trial</b> to try everything free.','To pay: tap <b>Get Premium</b> or <b>Get Business</b>, choose 1, 3 or 12 months and send the amount to the account shown.','Tap <b>Send screenshot on WhatsApp</b>, then <b>I’ve paid</b>.','Your plan is switched on once the transfer is confirmed.'])]);
+    sec.push(['9. Settings',L(['Tap the <b>gear</b> at the top.','<b>Your charges</b>: set how fees are worked out for POS cash agents.','<b>Business type</b>: change it if your business changes. Past records stay as they are.'])]);
+  }
+  modal(mHead('Step-by-step guide','book-open')+`<p class="text-sm text-slate-500 dark:text-slate-400 mb-3">Tap a topic to open it.</p>
+  ${sec.map(([t,h])=>`<details class="rounded-xl bg-slate-100 dark:bg-slate-800 mb-2"><summary class="p-3 font-semibold cursor-pointer">${t}</summary><div class="px-3 pb-3 text-sm text-slate-600 dark:text-slate-300">${h}</div></details>`).join('')}
+  <button class="${btn} w-full mt-2 bg-slate-200 dark:bg-slate-800" onclick="startTour()">Replay the 7-step tour</button>
+  ${BANK.whatsapp?`<a href="https://wa.me/${BANK.whatsapp}?text=${encodeURIComponent('Hello, I need help with POS Assistant.')}" target="_blank" rel="noopener" class="${btn} block w-full mt-2 text-center bg-[#25D366] text-slate-950">Need help? Message us on WhatsApp</a>`:''}`);
+}
+
+// ===== INSTALL AS APP (PWA) =====
+let deferredInstall=null;
+const isStandalone=()=>window.matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
+const isIOS=()=>/iphone|ipad|ipod/i.test(navigator.userAgent);
+const installHidden=()=>{try{return +localStorage.getItem('pwa_hide')>Date.now()}catch(e){return false}};
+function installCard(){
+  if(isStandalone()||installHidden()||(!deferredInstall&&!isIOS()))return '';
+  return `<section class="rounded-2xl p-4 bg-sky-400/10 border border-sky-400/30 flex items-center gap-3"><i data-lucide="smartphone" class="w-6 h-6 text-sky-400 shrink-0"></i>
+  <div class="flex-1 text-sm"><b>Install POS Assistant</b><div class="text-slate-500 dark:text-slate-400">${deferredInstall?'Open it from your home screen like an app.':'Tap the Share button, then “Add to Home Screen”.'}</div></div>
+  ${deferredInstall?`<button class="${btn} !py-2 bg-sky-400 text-slate-950" onclick="doInstall()">Install</button>`:''}
+  <button class="text-xs text-slate-500" onclick="hideInstall()">Not now</button></section>`;
+}
+async function doInstall(){if(!deferredInstall)return;deferredInstall.prompt();try{await deferredInstall.userChoice}catch(e){}deferredInstall=null;render()}
+function hideInstall(){try{localStorage.setItem('pwa_hide',Date.now()+7*864e5)}catch(e){}render()}
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredInstall=e;if(S&&(user||!cloud))render()});
+window.addEventListener('appinstalled',()=>{deferredInstall=null;if(S&&(user||!cloud))render()});
+if('serviceWorker' in navigator){
+  const hadSW=!!navigator.serviceWorker.controller;let reloaded=false;
+  navigator.serviceWorker.addEventListener('controllerchange',()=>{if(hadSW&&!reloaded&&!$('#modal').innerHTML){reloaded=true;location.reload()}});
+  window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').then(r=>r.update()).catch(()=>{}));
+}
+
+async function boot(){
+  if(!cloud){load(K);render();maybeAskMode();maybeOnboard();return}
+  const sim=$('#sim');if(sim)sim.closest('label').style.display='none';
+  sb=supabase.createClient(SB_URL,SB_KEY);
+  $('#out').onclick=()=>sb.auth.signOut();$('#prem').onclick=openPremium;$('#team').onclick=openTeam;
+  sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT'){user=null;okAccess=true;acc={};$('#app').innerHTML='';$('#out').classList.add('hidden');setCs('');showAuth()}});
+  const {data:{session}}=await sb.auth.getSession();
+  if(!session)return showAuth();
+  await enter(session.user);
+}
+boot();
+</script>
+</body>
+</html>

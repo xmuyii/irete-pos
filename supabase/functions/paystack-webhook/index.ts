@@ -1,5 +1,5 @@
 // Deploy: supabase functions deploy paystack-webhook --no-verify-jwt
-// Secrets: supabase secrets set PAYSTACK_SECRET_KEY=sk_live_xxx PRICE_KOBO=300000
+// Secrets: supabase secrets set PAYSTACK_SECRET_KEY=sk_live_xxx PRICE_KOBO_PREMIUM=300000 PRICE_KOBO_BUSINESS=2000000
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const enc = new TextEncoder();
 async function sign(secret: string, body: string) {
@@ -14,14 +14,17 @@ Deno.serve(async (req) => {
   const ev = JSON.parse(body);
   if (ev.event === "charge.success") {
     const d = ev.data, uid = d?.metadata?.user_id;
-    if (uid && d.currency === "NGN" && d.amount >= Number(Deno.env.get("PRICE_KOBO") ?? 0)) {
+    const plan = d?.metadata?.plan === "business" ? "business" : "premium";
+    const months = Math.max(1, Number(d?.metadata?.months ?? 1));
+    const min = Number(Deno.env.get(plan === "business" ? "PRICE_KOBO_BUSINESS" : "PRICE_KOBO_PREMIUM") ?? 0) * months * 0.8; // allows the multi-month discount
+    if (uid && d.currency === "NGN" && d.amount >= min) {
       const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
       const { data: cur } = await db.from("subscriptions").select("expires_at,paystack_ref").eq("user_id", uid).maybeSingle();
       if (cur?.paystack_ref !== d.reference) { // idempotent on retries
         const base = Math.max(Date.now(), cur?.expires_at ? new Date(cur.expires_at).getTime() : 0);
         await db.from("subscriptions").upsert({
-          user_id: uid, status: "active", paystack_ref: d.reference,
-          expires_at: new Date(base + 30 * 864e5).toISOString(), updated_at: new Date().toISOString(),
+          user_id: uid, status: "active", plan, paystack_ref: d.reference,
+          expires_at: new Date(base + 30 * months * 864e5).toISOString(), updated_at: new Date().toISOString(),
         });
       }
     }
