@@ -1,0 +1,10 @@
+{
+  "framework": null,
+  "buildCommand": null,
+  "installCommand": null,
+  "outputDirectory": "web",
+  "headers": [
+    {"source": "/", "headers": [{"key": "Cache-Control", "value": "no-cache, must-revalidate"}]},
+    {"source": "/(index.html|sw.js|config.js|manifest.json)", "headers": [{"key": "Cache-Control", "value": "no-cache, must-revalidate"}]}
+  ]
+}
